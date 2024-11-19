@@ -144,7 +144,7 @@ class ZeroEvalBenchmark(BaseBenchmark):
 
             outputs = self.compute(model, all_instances)
 
-            if model.rank != 0:
+            if model.accelerator.process_index != 0:
                 continue
 
             outputs = [[output] for output in outputs]

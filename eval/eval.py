@@ -148,7 +148,7 @@ def evaluate(
         cpu_count = os.cpu_count()
 
         max_workers = min(len(valid_tasks), cpu_count * 2)
-        if lm.world_size <= 1 or lm.rank == 0:
+        if lm.world_size <= 1 or lm.accelerator.process_index == 0:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 evaluate_results = list(
                     executor.map(
@@ -302,7 +302,7 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
     )
 
     # Add metadata to results
-    if lm.rank == 0:
+    if lm.accelerator.process_index == 0:
         add_results_metadata(results, args, lm)
         handle_evaluation_output(results, args, evaluation_tracker, wandb_logger)
 

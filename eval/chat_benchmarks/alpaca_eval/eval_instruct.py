@@ -117,7 +117,7 @@ class AlpacaBenchmark(BaseBenchmark):
                 self.logger.info("Generating responses for Alpaca Eval...")
                 outputs = self.compute(model, all_instances)
 
-            if model.rank != 0:
+            if model.accelerator.process_index != 0:
                 return None
 
             model_outputs = []
