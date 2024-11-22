@@ -112,7 +112,8 @@ Please continue to complete the function. You are not allowed to modify the give
                 self.logger.info("Generating responses for Human Eval...")
                 outputs = self.compute(model, all_instances)
 
-                if model.accelerator.process_index != 0:
+                is_main_process = lm.accelerator.process_index == 0 if hasattr(lm, 'accelerator') else lm.world_size <= 1
+                if not is_main_process:
                     continue
 
                 generated_examples = []
