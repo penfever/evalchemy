@@ -247,7 +247,7 @@ def evaluate(
         cpu_count = os.cpu_count()
 
         max_workers = min(len(valid_tasks), cpu_count * 2)
-        if lm.world_size <= 1 or lm.accelerator.process_index == 0:
+        if (hasattr(lm, 'accelerator') and lm.accelerator.process_index == 0) or lm.world_size <= 1 or :
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 evaluate_results = list(
                     executor.map(

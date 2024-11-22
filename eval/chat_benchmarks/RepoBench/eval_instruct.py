@@ -137,6 +137,7 @@ class RepoBenchmark(BaseBenchmark):
         temp_dir_obj = tempfile.TemporaryDirectory()
         temp_dir = temp_dir_obj.name
 
+        is_main_process = model.accelerator.process_index == 0 if hasattr(model, 'accelerator') else model.world_size <= 1
         for lang in self.languages:
             for subset in self.subsets:
                 dataset = load_data(split="test", task="completion", language=lang, length="2k", setting=subset)
@@ -163,8 +164,8 @@ class RepoBenchmark(BaseBenchmark):
                     )
 
                 outputs = self.compute(model, all_instances, do_slice=False)
-
-                if model.accelerator.process_index != 0:
+                
+                if not is_main_process:
                     continue
 
                 generated_examples = []
