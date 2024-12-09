@@ -1,0 +1,2 @@
+,win_rate,standard_error,mode,avg_length,n_wins,n_wins_base,n_draws,n_total,discrete_win_rate,length_controlled_winrate,lc_standard_error
+model_hf_model_args_pretrained=mlfoundations-dev__hp_ablations_gemma_adambeta1_0.85,0.0017851450204386943,0.0017504817433455773,community,2000,0,2,0,2,0.0,0.05499871904605236,0.002073474551497669

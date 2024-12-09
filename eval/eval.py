@@ -27,6 +27,7 @@ from eval.task import TaskManager as InstructTaskManager
 from eval.eval_tracker import DCEvaluationTracker
 
 from eval.constants import LIST_OPENAI_MODELS
+import ipdb
 
 
 def setup_custom_parser():
@@ -401,6 +402,10 @@ def initialize_model(
         lm = model
 
     lm.model_identifier = sanitize_model_name(f"model_{model}_model_args_{model_args}")
+    if lm.tokenizer.chat_template is None:
+        with open("chat_templates/gemma.txt", "r") as f:
+            chat_template = f.read()
+        lm.tokenizer.chat_template = chat_template
     return lm
 
 

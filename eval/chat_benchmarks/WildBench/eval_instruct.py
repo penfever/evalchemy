@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
 from eval.task import BaseBenchmark
+import ipdb
 
 # Import WildBench utilities
 from .src.unified_utils import save_outputs
@@ -167,6 +168,11 @@ class WildBenchBenchmark(BaseBenchmark):
             id_strs, chat_history, extracted_chats, metadata = self.load_dataset()
 
             # Prepare model inputs
+            
+            ipdb.set_trace()
+            # if model.tokenizer.chat_template is None:
+            #     with open(self.config.eval_template, "r") as f:
+            #         model.tokenizer.chat_template = f.read()
             model_inputs = [model.apply_chat_template(chat) for chat in extracted_chats]
 
             # Create temporary directory
