@@ -57,6 +57,7 @@ def process_results(json_file):
     
     # Extract IFEval average (using prompt-level strict accuracy)
     ifeval_score = results['leaderboard_ifeval']['prompt_level_strict_acc,none']
+    ifeval_second_score = results['leaderboard_ifeval']['inst_level_loose_acc,none']
     
     # Create output dictionary
     output = {
@@ -66,7 +67,8 @@ def process_results(json_file):
         'GPQA': gpqa_avg,
         'MATH': math_avg,
         'MUSR': musr_avg,
-        'IFEval': ifeval_score,
+        'IFEval (Prompt Level, Strict)': ifeval_score,
+        'IFEval (Instance Level, Loose)': ifeval_second_score,
         'MMLU Pro': mmlu_pro,
         'MixEval': mixeval,
         'MBPP': mbpp,
