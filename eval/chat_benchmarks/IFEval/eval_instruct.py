@@ -100,7 +100,7 @@ class IFEvalBenchmark(BaseBenchmark):
                             (
                                 inputs,
                                 {
-                                    "max_new_tokens": self.max_tokens,
+                                    "max_gen_toks": self.max_tokens,
                                     "do_sample": False,
                                 },
                             ),

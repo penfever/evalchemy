@@ -133,7 +133,7 @@ class ZeroEvalBenchmark(BaseBenchmark):
                         inputs,
                         {
                             "temperature": self.config.temperature,
-                            "max_length": self.config.max_tokens,
+                            "max_gen_toks": self.config.max_tokens,
                             "do_sample": self.config.do_sample,
                         },
                     ),
