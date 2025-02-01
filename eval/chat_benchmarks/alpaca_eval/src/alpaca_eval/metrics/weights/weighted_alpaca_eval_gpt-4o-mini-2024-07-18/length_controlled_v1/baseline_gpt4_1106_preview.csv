@@ -28,3 +28,8 @@
 "model_hf_model_args_pretrained=penfever__qwen-2-7b-WildChat-250k-qwen25-72b-lc,dtype=bfloat16",-1.8151537277734693,0.3778302717611364,-0.5560911986870881
 "model_hf_model_args_pretrained=penfever__dpo-rewild-8b-v0.05,dtype=bfloat16",-2.0748607792141991,0.4230197801066822,-0.4920306253680828
 "model_hf_model_args_pretrained=penfever__dpo-rewild-8b-v0.06,dtype=bfloat16",-1.8457744294000835,0.3298063217950916,-0.4281332498022202
+"model_hf_model_args_pretrained=penfever__open_instruct_dev,revision=dpo_tune__42__1737890412,dtype=bfloat16,batch_size=auto",-0.9921483045468146,0.3763258737283733,0.2521804866971728
+"model_hf_model_args_pretrained=penfever__open_instruct_dev,revision=dpo_tune__42__1738125172,dtype=bfloat16,batch_size=auto",-1.7994162372962756,0.3952127128649766,-0.4374556175869141
+"model_hf_model_args_pretrained=penfever__open_instruct_dev,revision=dpo_tune__42__1738082442,dtype=bfloat16,batch_size=auto",-1.5487006950837017,0.3443398388189662,-0.1072620089555594
+"model_hf_model_args_pretrained=meta-llama__Llama-3.3-70B-Instruct,dtype=bfloat16,parallelize=True,device_map=auto,max_length=4096,max_memory_per_gpu=68GiB,batch_size=2",-1.4974718619631999,0.4453038171668526,-0.1672032983272678
+"model_hf_model_args_pretrained=penfever__oumi-l8b-ultrachat,dtype=bfloat16,batch_size=auto",-1.5139925890290458,0.5211226872418303,-4.4102873904046973
