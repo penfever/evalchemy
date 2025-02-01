@@ -166,8 +166,13 @@ class WildBenchBenchmark(BaseBenchmark):
             # Load data
             id_strs, chat_history, extracted_chats, metadata = self.load_dataset()
 
+            # Remove extra fields that might not be compatible with some models
+            simplified_extracted_chats = [
+                [{"role": c["role"], "content": c["content"]} for c in chat] for chat in extracted_chats
+            ]
+
             # Prepare model inputs
-            model_inputs = [model.apply_chat_template(chat) for chat in extracted_chats]
+            model_inputs = [model.apply_chat_template(chat) for chat in simplified_extracted_chats]
 
             # Create temporary directory
             temp_dir_obj = tempfile.TemporaryDirectory()

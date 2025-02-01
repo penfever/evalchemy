@@ -104,6 +104,7 @@ dependencies = [
     "requests>=2.28",
     "websocket",
     "aiofiles",
+    "bespokelabs-curator>=0.16.0",
     
     # Database
     "sqlalchemy",

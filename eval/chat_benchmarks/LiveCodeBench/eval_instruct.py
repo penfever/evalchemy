@@ -15,7 +15,6 @@ import copy
 from .livecodebench_utils import lcb_run, map_to_example, has_test_type, post_process_code, translate_private_test_cases
 
 from eval.task import BaseBenchmark
-from eval.utils import SYSTEM_PROMPT
 from datasets import load_dataset
 
 import lm_eval.models
@@ -74,11 +73,6 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
 
         # Prepare instances for model
         all_instances = []
-        if isinstance(model, lm_eval.models.huggingface.HFLM):
-            model_name = model.pretrained
-        else:
-            model_name = model.model_args["model"]
-        system_prompt = SYSTEM_PROMPT[model_name]
         for idx, example in enumerate(examples):
             if example["is_stdin"]:
                 prompt_text = (
@@ -90,19 +84,22 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
                     "Generate an executable Python function generated from the given prompt. Return the function body without invoking it at the final solution."
                     + example["prompt"]
                 )
-            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt_text}]
-            templated_messages = model.apply_chat_template(messages)
+            messages = [{"role": "user", "content": prompt_text}]
 
-            generation_args = {
-                "do_sample": False,
-                "max_gen_toks" if isinstance(model, VLLM) else "max_new_tokens": self.max_new_tokens,
-            }
+            templated_messages = model.apply_chat_template(messages)
 
             all_instances.append(
                 Instance(
                     "generate_until",
                     example,
-                    (templated_messages, generation_args),
+                    (
+                        templated_messages,
+                        {
+                            "do_sample": False,
+                            "max_new_tokens": self.max_new_tokens,
+                            "temperature": 0.7,
+                        },
+                    ),
                     idx,
                 )
             )

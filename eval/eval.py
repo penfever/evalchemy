@@ -23,6 +23,7 @@ import lm_eval.api.registry
 import lm_eval.api.task
 import lm_eval.models
 
+from eval.chat_benchmarks.curator_lm import CuratorAPIModel  # register curator model
 from eval.task import TaskManager as InstructTaskManager
 from eval.eval_tracker import DCEvaluationTracker
 

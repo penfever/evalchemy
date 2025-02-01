@@ -259,10 +259,9 @@ class MixEvalBenchmark(BaseBenchmark):
     def _get_model_name(self, model: LM) -> str:
         if "model_identifier" in model.__dict__:
             return (
-                model.model_identifier.split("pretrained=")[1]
+                model.model_identifier.split("=")[1]
                 .split(",")[0]
                 .split("__")[-1]
-                .replace("Meta-", "")
                 .replace("-", "_")
                 .lower()
                 .replace(".", "")

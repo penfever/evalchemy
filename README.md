@@ -6,6 +6,47 @@
 
 Evalchemy is a unified and easy-to-use toolkit for evaluating language models, focussing on post-trained models. Evalchemy is developed by the [DataComp community](https://datacomp.ai) and [Bespoke Labs](https://bespokelabs.ai)  and builds on the [LM-Eval-Harness](https://github.com/EleutherAI/lm-evaluation-harness) to provide a unified, easy-to-use platform for language model evaluation. Evalchemy integrates multiple existing benchmarks, such as RepoBench, AlpacaEval, and ZeroEval. We've streamlined the process by:
 
+
+## 🎉 What's New 
+
+#### [2025.01.30] API Model Support
+
+- [API models via Curator](https://github.com/bespokelabsai/curator/): With `--model curator` you can now evaluate with even more API based models via [Curator](https://github.com/bespokelabsai/curator/), including all those supported by [LiteLLM](https://docs.litellm.ai/docs/providers) 
+
+```
+  python -m eval.eval \
+        --model curator  \
+        --tasks AIME24,MATH500,GPQA-Diamond \
+        --model_name "gemini/gemini-2.0-flash-thinking-exp-01-21" \
+        --apply_chat_template False \
+        --model_args 'tokenized_requests=False' \
+        --output_path logs
+```
+
+#### [2025.01.29] New Reasoning Benchmarks
+
+- AIME24, AMC23, MATH500, LiveCodeBench, GPQA-Diamond, HumanEvalPlus, MBPPPlus, BigCodeBench, MultiPL-E, and CRUXEval have been added to our growing list of [available benchmarks](https://github.com/mlfoundations/evalchemy?tab=readme-ov-file#built-in-benchmarks). This is part of the effort in the [Open Thoughts](https://github.com/open-thoughts/open-thoughts) project. See the [our blog post](https://www.open-thoughts.ai/blog/measure) on using Evalchemy for measuring reasoning models. 
+
+#### [2025.01.28] New Model Support
+- [vLLM models](https://blog.vllm.ai/2023/06/20/vllm.html): High-performance inference and serving engine with PagedAttention technology
+```bash
+python -m eval.eval \
+    --model vllm \
+    --tasks alpaca_eval \
+    --model_args "pretrained=meta-llama/Meta-Llama-3-8B-Instruct" \
+    --batch_size 16 \
+    --output_path logs
+```
+- [OpenAI models](https://openai.com/): Full support for OpenAI's model lineup
+```bash
+python -m eval.eval \
+    --model openai-chat-completions \
+    --tasks alpaca_eval \
+    --model_args "model=gpt-4o-mini-2024-07-18,num_concurrent=32" \
+    --batch_size 16 \
+    --output_path logs 
+```
+
 ### Key Features
 
 - **Unified Installation**: One-step setup for all benchmarks, eliminating dependency conflicts
@@ -54,8 +95,10 @@ huggingface-cli login
   - **IFEval**: [Instruction following capability evaluation](https://github.com/google-research/google-research/tree/master/instruction_following_eval)
   - **AlpacaEval**: [Instruction following evaluation](https://github.com/tatsu-lab/alpaca_eval)
   - **HumanEval**: [Code generation and problem solving](https://github.com/openai/human-eval)
+  - **HumanEvalPlus**: [HumanEval with more test cases](https://github.com/evalplus/evalplus)
   - **ZeroEval**: [Logical reasoning and problem solving](https://github.com/WildEval/ZeroEval)
   - **MBPP**: [Python programming benchmark](https://github.com/google-research/google-research/tree/master/mbpp)
+  - **MBPPPlus**: [MBPP with more test cases](https://github.com/evalplus/evalplus)
   - **BigCodeBench:** [Benchmarking Code Generation with Diverse Function Calls and Complex Instructions](https://arxiv.org/abs/2406.15877)
 
     > **🚨 Warning:** for BigCodeBench evaluation, we strongly recommend using a Docker container since the execution of LLM generated code on a machine can lead to destructive outcomes. More info is [here](eval/chat_benchmarks/BigCodeBench/README.md).
@@ -70,6 +113,7 @@ huggingface-cli login
   - **Arena-Hard-Auto** (Coming soon): [Automatic evaluation tool for instruction-tuned LLMs](https://github.com/lmarena/arena-hard-auto)
   - **SWE-Bench** (Coming soon): [Evaluating large language models on real-world software issues](https://github.com/princeton-nlp/SWE-bench)
   - **SafetyBench** (Coming soon): [Evaluating the safety of LLMs](https://github.com/thu-coai/SafetyBench)
+  - **SciCode Bench** (Coming soon): [Evaluate language models in generating code for solving realistic scientific research problems](https://github.com/scicode-bench/SciCode)
   - **Berkeley Function Calling Leaderboard** (Coming soon): [Evaluating ability of LLMs to use APIs](https://gorilla.cs.berkeley.edu/blogs/13_bfcl_v3_multi_turn.html)
   
 
@@ -131,10 +175,6 @@ Through LM-Eval-Harness, we support all HuggingFace models and are currently add
 
 To choose a model, simply set 'pretrained=<name of hf model>' where the model name can either be a HuggingFace model name or a path to a local model. 
 
-#### Coming Soon
-- Support for [vLLM models](https://vllm.ai/)
-- Support for [OpenAI](https://openai.com/)
-- Few-shot prompting for instruction benchmarks.
 
 ### Multi-GPU Evaluation
 

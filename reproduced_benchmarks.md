@@ -69,6 +69,13 @@
 |             |         |                                         | complete (pass@1)             | 41.9        | 40.5             |                                     |
 |             |         | Qwen/Qwen2.5-7B-Instruct                | instruct (pass@1)             | 35.2        | 37.6             |                                     |
 |             |         |                                         | complete (pass@1)             | 46.7        | 46.1             |                                     |
+| LiveBench   | Negin   | Meta-Llama-3-8B-Instruct                | global_average                | 26.78       | 26.74            | https://livebench.ai/#/?q=3.1
+|HumanEvalPlus| Sedrick | mistralai/Mistral-7B-Instruct-v0.2      | accuracy (pass@1)             | 27.44       | 36.0             | [EvalPlus Leaderboard](https://evalplus.github.io/leaderboard.html) |
+|             |         | meta-llama/Llama-3.1-8B-Instruct        | accuracy (pass@1)             | 62.2        | 62.8             | [EvalPlus Leaderboard](https://evalplus.github.io/leaderboard.html) |
+|             |         | google/codegemma-7b-it                  | accuracy (pass@1)             | 36.6        | 51.8             | [EvalPlus Leaderboard](https://evalplus.github.io/leaderboard.html) |
+| MBPPPlus    | Sedrick | mistralai/Mistral-7B-Instruct-v0.2      | accuracy (pass@1)             | 43.9        | 37.0             | [EvalPlus Leaderboard](https://evalplus.github.io/leaderboard.html) |
+|             |         | meta-llama/Llama-3.1-8B-Instruct        | accuracy (pass@1)             | 58.7        | 55.6             | [EvalPlus Leaderboard](https://evalplus.github.io/leaderboard.html) |
+|             |         | google/codegemma-7b-it                  | accuracy (pass@1)             | 56.6        | 56.9             | [EvalPlus Leaderboard](https://evalplus.github.io/leaderboard.html) |
 |LiveCodeBench| Negin   | deepseek-ai/DeepSeek-R1-Distill-Qwen-7B | (pass@1)                      | 37.9        | 37.6             | [DeepSeek-R1 Paper](https://github.com/deepseek-ai/DeepSeek-R1/blob/main/DeepSeek_R1.pdf) Table 5 |
 | GPQADiamond | Negin   | deepseek-ai/DeepSeek-R1-Distill-Qwen-7B | accuracy                      | 52          | 49.1             | [DeepSeek-R1 Paper](https://github.com/deepseek-ai/DeepSeek-R1/blob/main/DeepSeek_R1.pdf) Table 5 |
 | MultiPL-E.  | Marianna| Qwen/CodeQwen1.5-7B-Chat                | java (pass@1)                 | 64.0        | 61.04            |  [Big Code Leaderboard](https://huggingface.co/spaces/bigcode/bigcode-models-leaderboard)                                     |
@@ -79,6 +86,6 @@
 |             |         |                                         | ts (pass@1)                   | 73.0        | 71.7             |           [Qwen2.5-Coder Technical Report](https://arxiv.org/pdf/2409.12186) (Table 17)                          |
 |             |         |                                         | js (pass@1)                   | 69.5        | 75.2            |           [Qwen2.5-Coder Technical Report](https://arxiv.org/pdf/2409.12186) (Table 17)                          |                                 |
 | CRUXEval    | Marianna| Qwen/Qwen2.5-Coder-7B-Instruct          | Input-CoT (pass@1)            | 66.2        | 65.8            |  [Qwen2.5-Coder Technical Report](https://arxiv.org/pdf/2409.12186) (Table 18)                                     |
-| CRUXEval    |         |                                         | Output-CoT (pass@1)           | 66.7        | 65.9            |                                     |
-| CRUXEval    |         | Qwen/Qwen2.5-Coder-3B-Instruct          | Input-CoT (pass@1)            | 53.4        | 53.2            |                                    |
-| CRUXEval    |         |                                         | Output-CoT (pass@1)           | 53.3        | 56.0            |                                     |
+|             |         |                                         | Output-CoT (pass@1)           | 66.7        | 65.9            |                                     |
+|             |         | Qwen/Qwen2.5-Coder-3B-Instruct          | Input-CoT (pass@1)            | 53.4        | 53.2            |                                    |
+|             |         |                                         | Output-CoT (pass@1)           | 53.3        | 56.0            |                                     |

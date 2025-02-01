@@ -10,7 +10,6 @@ from eval.task import BaseBenchmark
 
 import lm_eval.models
 from lm_eval.models.vllm_causallms import VLLM
-from eval.utils import SYSTEM_PROMPT
 
 # Modified version of hendrycks_math with additional instruction to mark the solution with \\boxed
 # https://github.com/mlfoundations/evalchemy/blob/e70a45e41cb2ada273d6bb98e75dba303ec31f8b/eval/chat_benchmarks/AMC23/eval_instruct.py#L15
@@ -58,28 +57,26 @@ class AIME24Benchmark(BaseBenchmark):
         examples = self.load_questions()
         # Prepare instances for model
         all_instances = []
-        if isinstance(model, lm_eval.models.huggingface.HFLM):
-            model_name = model.pretrained
-        else:
-            model_name = model.model_args["model"]
-        system_prompt = SYSTEM_PROMPT[model_name]
+
         for idx, example in enumerate(examples):
             messages = [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": PROMPT.format(problem=example["problem"])},
             ]
-            templated_messages = model.apply_chat_template(messages)
 
-            generation_args = {
-                "do_sample": False,
-                "max_gen_toks" if isinstance(model, VLLM) else "max_new_tokens": self.max_new_tokens,
-            }
+            templated_messages = model.apply_chat_template(messages)
 
             all_instances.append(
                 Instance(
                     "generate_until",
                     example,
-                    (templated_messages, generation_args),
+                    (
+                        templated_messages,
+                        {
+                            "do_sample": False,
+                            "max_new_tokens": self.max_new_tokens,
+                            "temperature": 0.7,
+                        },
+                    ),
                     idx,
                 )
             )

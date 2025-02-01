@@ -362,7 +362,7 @@ class DCEvaluationTracker:
         with self.session_scope() as session:
             if not model_name:
                 args_dict = simple_parse_args_string(eval_log_dict["config"]["model_args"])
-                model_name = args_dict["pretrained"]
+                model_name = args_dict["pretrained"] if "pretrained" in args_dict else args_dict["model"]
 
             if model_source == "hf":
                 weights_location = (
