@@ -68,49 +68,81 @@ def ensure_model_on_gpu(model: LM, logger: Optional[logging.Logger] = None) -> L
     Returns:
         The model, now on GPU if it wasn't already
     """
-    if hasattr(model, '_is_on_cpu') and model._is_on_cpu:
-        if logger:
-            logger.info("Moving post-processing model from CPU to GPU for inference")
+    if not hasattr(model, '_is_on_cpu') or not model._is_on_cpu:
+        # Model is already on GPU or doesn't track CPU/GPU state
+        return model
         
-        # First, try to free CUDA cache to reduce OOM risk
+    if logger:
+        logger.info("Moving post-processing model from CPU to GPU for inference")
+    
+    # Check available GPU memory first
+    try:
+        import torch
+        if torch.cuda.is_available():
+            free_mem = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+            total_mem = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+            if logger:
+                logger.info(f"Before moving model to GPU: {free_mem:.2f} GB free out of {total_mem:.2f} GB total VRAM")
+            
+            # If we have very little VRAM available, don't even try to move the model
+            if free_mem < 1.0:
+                if logger:
+                    logger.warning(f"Less than 1 GB free VRAM available ({free_mem:.2f} GB) - keeping model on CPU")
+                return model
+                
+            # Try to free CUDA cache to reduce OOM risk
+            torch.cuda.empty_cache()
+            if logger:
+                logger.info("Cleared CUDA cache before moving model to GPU")
+    except (ImportError, Exception) as e:
+        if logger:
+            logger.warning(f"Unable to check/clear GPU memory: {str(e)}")
+    
+    # Try to move model components to GPU
+    try:
+        # Different model types need different approaches to move to GPU
+        if hasattr(model, 'model'):
+            if hasattr(model.model, 'to'):
+                model.model = model.model.to('cuda')
+                if logger:
+                    logger.info("Moved model to GPU using .to('cuda')")
+            elif hasattr(model.model, 'cuda'):
+                model.model.cuda()
+                if logger:
+                    logger.info("Moved model to GPU using .cuda()")
+            
+        # Also move tokenizer to GPU if possible
+        if hasattr(model, 'tokenizer') and hasattr(model.tokenizer, 'to'):
+            try:
+                model.tokenizer = model.tokenizer.to('cuda')
+                if logger:
+                    logger.info("Moved tokenizer to GPU")
+            except Exception as tokenizer_e:
+                if logger:
+                    logger.debug(f"Could not move tokenizer to GPU: {str(tokenizer_e)}")
+                
+        # Mark as now on GPU
+        model._is_on_cpu = False
+        if logger:
+            logger.info("Successfully moved post-processing model to GPU")
+            
+        # Check available memory after moving
         try:
             import torch
             if torch.cuda.is_available():
+                free_mem_after = torch.cuda.mem_get_info()[0] / (1024 ** 3)
                 if logger:
-                    logger.info("Clearing CUDA cache before moving model to GPU")
-                torch.cuda.empty_cache()
-        except (ImportError, Exception) as e:
-            if logger:
-                logger.warning(f"Unable to clear CUDA cache: {str(e)}")
-                
-        # Different model types need different approaches to move to GPU
-        try:
-            if hasattr(model, 'model') and hasattr(model.model, 'to'):
-                model.model = model.model.to('cuda')
-                
-            elif hasattr(model, 'model') and hasattr(model.model, 'cuda'):
-                model.model.cuda()
-                
-            # Also move tokenizer to GPU if possible
-            if hasattr(model, 'tokenizer') and hasattr(model.tokenizer, 'to'):
-                try:
-                    model.tokenizer = model.tokenizer.to('cuda')
-                except:
-                    pass  # Ignore if tokenizer can't be moved
-                    
-            # Mark as now on GPU
-            model._is_on_cpu = False
+                    logger.info(f"After moving model to GPU: {free_mem_after:.2f} GB free VRAM")
+        except Exception:
+            pass
             
-            if logger:
-                logger.info("Successfully moved post-processing model to GPU")
-                
-        except Exception as e:
-            if logger:
-                logger.error(f"Failed to move model to GPU: {str(e)}")
-                logger.warning("Will attempt to continue with model on CPU")
-                import traceback
-                logger.error(traceback.format_exc())
-        
+    except Exception as e:
+        if logger:
+            logger.error(f"Failed to move model to GPU: {str(e)}")
+            logger.warning("Will continue with model on CPU")
+            import traceback
+            logger.error(traceback.format_exc())
+    
     return model
 
 
@@ -196,7 +228,22 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
     if cleaned_text != text:
         logger.info("Successfully removed thinking tokens with regex, skipping model-based cleaning")
         return cleaned_text
-        
+    
+    # Check available GPU memory before trying model-based cleaning
+    try:
+        import torch
+        if torch.cuda.is_available():
+            free_mem = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+            total_mem = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+            logger.info(f"Available GPU memory: {free_mem:.2f} GB free out of {total_mem:.2f} GB total")
+            
+            # If we have very little free VRAM, skip model-based cleaning
+            if free_mem < 1.0:
+                logger.warning(f"Only {free_mem:.2f} GB free VRAM available - skipping model-based cleaning")
+                return cleaned_text
+    except Exception as e:
+        logger.warning(f"Unable to check GPU memory: {str(e)}")
+    
     # If regex didn't help, try model-based cleaning
     try:
         # Move model to GPU if it's currently on CPU
@@ -218,20 +265,46 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             {"role": "user", "content": prompt}
         ]
         
-        # Generate response
-        inputs = model.apply_chat_template(messages)
-        response = model.generate_until([inputs])[0]
-        
-        if response and len(response) > 0:
-            return response.strip()
-        else:
-            logger.warning("Model produced empty response, returning original text")
-            return text
+        # Generate response with proper Instance object
+        try:
+            from lm_eval.api.instance import Instance
+            
+            # First get the templated input if possible
+            try:
+                inputs = model.apply_chat_template(messages)
+            except:
+                # If apply_chat_template fails, use the prompt directly
+                inputs = prompt
+                
+            # Create a proper Instance object with the required args format
+            instance = Instance(
+                task_name="generate_until",
+                messages=messages,
+                args=(inputs, {"max_new_tokens": 1024}),
+                idx=0
+            )
+            
+            # Generate response
+            logger.info("Generating response using LLM for post-processing")
+            response = model.generate_until([instance])[0]
+            
+            if response and len(response) > 0:
+                logger.info("Successfully generated post-processed response with LLM")
+                return response.strip()
+            else:
+                logger.warning("Model produced empty response, returning original text")
+                return cleaned_text
+                
+        except Exception as e:
+            logger.warning(f"Error using generate_until with Instance: {str(e)}")
+            logger.warning("Falling back to regex-only cleaning")
+            return cleaned_text
+            
     except Exception as e:
-        logger.error(f"Error processing with model: {str(e)}")
+        logger.error(f"Error during model-based post-processing: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        return text
+        return cleaned_text
 
 
 def postprocess_reasoning(

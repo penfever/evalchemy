@@ -227,16 +227,66 @@ class BaseBenchmark(ABC):
         if self.reasoning_postproc and generation_results is not None:
             # First try to release VLLM resources if available (to free VRAM)
             try:
+                # Store original model type for debugging
+                model_type = type(model).__name__
+                self.logger.info(f"Model type: {model_type}")
+                
+                # Special handling for VLLM models
+                import lm_eval.models as lm_eval_models
+                if hasattr(lm_eval_models, "vllm_causallms") and isinstance(model, lm_eval_models.vllm_causallms.VLLM):
+                    self.logger.info("VLLM model detected, performing special resource cleanup")
+                    
+                    # For VLLM models, we need to delete the engine to fully free GPU memory
+                    if hasattr(model, "engine") and model.engine is not None:
+                        self.logger.info("Deleting VLLM engine to free GPU memory")
+                        import gc
+                        
+                        # Set engine reference to None and run garbage collection
+                        engine_ref = model.engine
+                        model.engine = None
+                        del engine_ref
+                        gc.collect()
+                
+                # Try explicit resource release for any model
                 if hasattr(model, "release_resources") and callable(model.release_resources):
                     self.logger.info("Releasing main LLM resources to free VRAM before post-processing")
                     model.release_resources()
+                    
+                # If the model has a model attribute with direct GPU memory, try to move it to CPU
+                if hasattr(model, "model"):
+                    self.logger.info("Attempting to move main model to CPU to free GPU memory")
+                    try:
+                        if hasattr(model.model, "to") and callable(model.model.to):
+                            model.model = model.model.to("cpu")
+                            self.logger.info("Successfully moved model to CPU using .to('cpu')")
+                        elif hasattr(model.model, "cpu") and callable(model.model.cpu):
+                            model.model.cpu()
+                            self.logger.info("Successfully moved model to CPU using .cpu()")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to move model to CPU: {str(e)}")
                 
-                # Also try to clear CUDA cache
+                # Force garbage collection
+                try:
+                    import gc
+                    gc.collect()
+                    self.logger.info("Garbage collection completed")
+                except Exception as e:
+                    self.logger.warning(f"Failed during garbage collection: {str(e)}")
+                
+                # Clear CUDA cache
                 try:
                     import torch
                     if torch.cuda.is_available():
-                        self.logger.info("Clearing CUDA cache before post-processing")
+                        # Report VRAM status before cleanup
+                        free_mem_before = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+                        total_mem = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+                        self.logger.info(f"Before cleanup: {free_mem_before:.2f} GB free out of {total_mem:.2f} GB total VRAM")
+                        
+                        # Clear cache and report again
                         torch.cuda.empty_cache()
+                        free_mem_after = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+                        self.logger.info(f"After cleanup: {free_mem_after:.2f} GB free out of {total_mem:.2f} GB total VRAM")
+                        self.logger.info(f"Freed {free_mem_after - free_mem_before:.2f} GB of VRAM")
                 except (ImportError, Exception) as e:
                     self.logger.warning(f"Unable to clear CUDA cache: {str(e)}")
                 

@@ -301,25 +301,43 @@ class MTBenchBenchmark(BaseBenchmark):
                                     for choice_idx, choice in enumerate(processed_ans["choices"]):
                                         if "turns" in choice:
                                             for turn_idx, turn_content in enumerate(choice["turns"]):
-                                                # Check if this turn contains thinking tokens
-                                                contains_thinking = any(pattern in turn_content for pattern in thinking_patterns)
+                                                # More robust check for thinking tokens - only match exact patterns
+                                                contains_thinking = False
+                                                for pattern in thinking_patterns:
+                                                    if pattern in turn_content:
+                                                        # Double-check that it's not a false positive by checking for closing tags
+                                                        # For tags like <think>, check for </think>
+                                                        if pattern.startswith("<") and pattern.endswith(">") and not pattern.startswith("</"):
+                                                            closing_tag = "</" + pattern[1:]
+                                                            if closing_tag in turn_content:
+                                                                contains_thinking = True
+                                                                self.logger.info(f"Found thinking token pattern: {pattern} with closing tag {closing_tag}")
+                                                                break
+                                                        # For other formats, do a simpler check
+                                                        else:
+                                                            contains_thinking = True
+                                                            self.logger.info(f"Found thinking token pattern: {pattern}")
+                                                            break
                                                 
-                                                if contains_thinking or (self.debug and turn_idx == 0 and choice_idx == 0):
+                                                # Force processing in debug mode only for the first turn of the first answer
+                                                force_debug = self.debug and turn_idx == 0 and choice_idx == 0 and len(processed_answers) == 0
+                                                
+                                                if contains_thinking or force_debug:
+                                                    if force_debug and not contains_thinking:
+                                                        self.logger.info(f"Debug mode enabled - forcing processing of first turn")
+                                                    else:
+                                                        self.logger.info(f"Found thinking tokens in turn {turn_idx} of choice {choice_idx}")
+                                                    
                                                     has_thinking_tokens = True
-                                                    self.logger.info(f"Found thinking tokens in turn {turn_idx} of choice {choice_idx}")
                                                     
                                                     # For debugging, log a snippet of content before processing
                                                     max_log_length = 100
                                                     self.logger.info(f"Original content (first {max_log_length} chars): " + 
                                                                      turn_content[:max_log_length] + "...")
                                                     
-                                                    # Apply post-processing - first try regex-based cleaning
+                                                    # Apply post-processing using regex-based cleaning
+                                                    # We'll skip model-based cleaning since we're having OOM issues
                                                     processed_turn = clean_thinking_tokens(turn_content)
-                                                    
-                                                    # If regex didn't remove everything, use model-based cleanup
-                                                    if processed_turn == turn_content or any(pattern in processed_turn for pattern in thinking_patterns):
-                                                        self.logger.info("Regex cleaning wasn't fully effective, applying model-based post-processing")
-                                                        processed_turn = self.apply_reasoning_postprocessing(turn_content)
                                                     
                                                     # Log sample of processed result
                                                     self.logger.info(f"Processed content (first {max_log_length} chars): " + 
