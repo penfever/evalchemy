@@ -366,19 +366,21 @@ class MTBenchBenchmark(BaseBenchmark):
                                 shutil.copy(answer_file, backup_file)
                                 self.logger.info(f"Backed up original answers to {backup_file}")
                             
+                            # Write to file and flush immediately within the same with block
                             with open(answer_file, "w") as f:
                                 for ans in processed_answers:
                                     f.write(json.dumps(ans) + "\n")
+                                
+                                # Flush within the with block while file is still open
+                                f.flush()
+                                try:
+                                    import os
+                                    os.fsync(f.fileno())
+                                    self.logger.info("Flushed file writes to disk")
+                                except Exception as flush_err:
+                                    self.logger.warning(f"Error flushing file to disk: {str(flush_err)}")
                             
                             self.logger.info(f"Wrote post-processed answers back to {answer_file}")
-
-                            # IMPORTANT: Flush writes to disk to ensure they're visible to subsequent reads
-                            try:
-                                import os
-                                os.fsync(f.fileno())
-                                self.logger.info("Flushed file writes to disk")
-                            except Exception as flush_err:
-                                self.logger.warning(f"Error flushing file to disk: {str(flush_err)}")
                         else:
                             self.logger.info(f"No thinking tokens found in {answer_file}, skipping post-processing")
                 else:

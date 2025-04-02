@@ -262,14 +262,29 @@ def extract_thinking_content(text: str, logger: logging.Logger) -> (str, bool, s
                 thinking_content += match.strip()
                 
     if found_thinking:
-        # Clean up any nested thinking tags
-        for pattern, _ in thinking_patterns:
-            # Extract just the group pattern without the tags
-            clean_pattern = pattern.replace('(.*?)', '')
-            start_tag = clean_pattern.split(')')[0]
-            end_tag = clean_pattern.split('(')[1]
-            # Remove any remaining tags from the extracted content
-            thinking_content = thinking_content.replace(start_tag, '').replace(end_tag, '')
+        # Clean up any nested thinking tags - safer approach with explicit tags
+        thinking_content = thinking_content.replace('<think>', '').replace('</think>', '')
+        thinking_content = thinking_content.replace('<thinking>', '').replace('</thinking>', '')
+        thinking_content = thinking_content.replace('<thoughts>', '').replace('</thoughts>', '')
+        thinking_content = thinking_content.replace('<thought>', '').replace('</thought>', '')
+        thinking_content = thinking_content.replace('<Think>', '').replace('</Think>', '')
+        thinking_content = thinking_content.replace('<Thinking>', '').replace('</Thinking>', '')
+        thinking_content = thinking_content.replace('<Thoughts>', '').replace('</Thoughts>', '')
+        thinking_content = thinking_content.replace('<Thought>', '').replace('</Thought>', '')
+        
+        # Handle other format tags
+        thinking_content = thinking_content.replace('<|begin_of_thought|>', '').replace('<|end_of_thought|>', '')
+        thinking_content = thinking_content.replace('<|thinking|>', '').replace('<|/thinking|>', '')
+        thinking_content = thinking_content.replace('<|thought|>', '').replace('<|/thought|>', '')
+        thinking_content = thinking_content.replace('<|thoughts|>', '').replace('<|/thoughts|>', '')
+        
+        # Handle bracket formats
+        thinking_content = thinking_content.replace('[thinking]', '').replace('[/thinking]', '')
+        thinking_content = thinking_content.replace('[thought]', '').replace('[/thought]', '')
+        thinking_content = thinking_content.replace('[thoughts]', '').replace('[/thoughts]', '')
+        thinking_content = thinking_content.replace('[THINKING]', '').replace('[/THINKING]', '')
+        thinking_content = thinking_content.replace('[THOUGHT]', '').replace('[/THOUGHT]', '')
+        thinking_content = thinking_content.replace('[THOUGHTS]', '').replace('[/THOUGHTS]', '')
     
     return thinking_content, found_thinking, text
 
@@ -483,19 +498,24 @@ def postprocess_object(
     
     # Process strings
     if isinstance(obj, str):
-        # Check if string contains thinking tokens
-        has_thinking = "<think>" in obj
+        # Check if string contains thinking tokens - check for all common formats
+        thinking_patterns = ["<think>", "<thinking>", "<thought>", "<Think>", 
+                          "[thinking]", "[thought]", "<|thinking|>"]
+        
+        has_thinking = any(pattern in obj for pattern in thinking_patterns)
         if has_thinking:
             logger.info(f"Found thinking tokens in string, length: {len(obj)}")
         
         # Process the string
         result = postprocess_reasoning(obj, postproc_model, logger, use_model)
         
-        # Check if processing was effective
-        if has_thinking and "<think>" not in result:
+        # Check if processing was effective - check all patterns
+        if has_thinking and not any(pattern in result for pattern in thinking_patterns):
             logger.info("Successfully removed thinking tokens from string")
-        elif has_thinking and "<think>" in result:
-            logger.warning("Failed to remove thinking tokens from string")
+        elif has_thinking and any(pattern in result for pattern in thinking_patterns):
+            logger.warning("Failed to remove all thinking tokens from string")
+            # Apply regex cleanup as a fallback
+            result = clean_thinking_tokens(result)
             
         return result
     
