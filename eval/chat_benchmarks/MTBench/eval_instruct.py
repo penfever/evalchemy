@@ -73,6 +73,8 @@ class MTBenchBenchmark(BaseBenchmark):
         annotator_model: str = "gpt-4o-mini-2024-07-18",
         logger: Optional[logging.Logger] = None,
         system_instruction: Optional[str] = None,
+        reasoning_postproc: bool = False,
+        reasoning_postproc_model: str = "Qwen/Qwen2.5-7B-Instruct",
     ):
         """
         Initialize MTBench benchmark.
@@ -83,8 +85,15 @@ class MTBenchBenchmark(BaseBenchmark):
             debug: If True, run in debug mode on 2 samples
             logger: Optional logger instance
             system_instruction: Optional system instruction for the model
+            reasoning_postproc: Whether to enable reasoning post-processing
+            reasoning_postproc_model: Model to use for reasoning post-processing
         """
-        super().__init__(logger=logger, system_instruction=system_instruction)
+        super().__init__(
+            logger=logger, 
+            system_instruction=system_instruction,
+            reasoning_postproc=reasoning_postproc,
+            reasoning_postproc_model=reasoning_postproc_model
+        )
         self.base_path = Path(base_path)
         if annotator_model == "auto":
             annotator_model = "gpt-4"
@@ -104,12 +113,16 @@ class MTBenchBenchmark(BaseBenchmark):
         # Create directories
         self.answer_dir.mkdir(parents=True, exist_ok=True)
         self.judgment_dir.mkdir(parents=True, exist_ok=True)
+        
+        if self.reasoning_postproc:
+            self.logger.info(f"MTBench reasoning post-processing is enabled with model: {self.reasoning_postproc_model}")
 
     def get_model_answers(self, model: LM, model_id: str, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Generate model answers for all questions."""
         # Initialize tracking structures
         all_convs = [[] for _ in questions]
         all_choices = [{"index": 0, "turns": []} for _ in questions]
+        all_answers = []  # Store the complete answer objects
 
         max_turns = max(len(q["turns"]) for q in questions)
         answer_file = self.answer_dir / f"{model_id}.jsonl"
@@ -168,10 +181,10 @@ class MTBenchBenchmark(BaseBenchmark):
                         "choices": [all_choices[q_idx]],
                         "tstamp": time.time(),
                     }
-                    with open(answer_file, "a") as f:
-                        f.write(json.dumps(ans_json) + "\n")
+                    # Store complete answer objects for post-processing
+                    all_answers.append(ans_json)
 
-        return all_choices
+        return {"choices": all_choices, "answers": all_answers, "questions": questions}
 
     def generate_responses(self, model: LM) -> Dict[str, Any]:
         """
@@ -181,7 +194,7 @@ class MTBenchBenchmark(BaseBenchmark):
             model: Language model instance
 
         Returns:
-            Dictionary containing model identifier, or None for non-primary ranks
+            Dictionary containing model responses and metadata, or None for non-primary ranks
         """
         # Load questions
         questions = load_questions(self.question_file, self.config.question_begin, self.config.question_end)
@@ -194,20 +207,24 @@ class MTBenchBenchmark(BaseBenchmark):
         random.shuffle(questions)
 
         # Generate answers
-        answers = self.get_model_answers(model=model, model_id=model.model_identifier, questions=questions)
+        response_data = self.get_model_answers(model=model, model_id=model.model_identifier, questions=questions)
 
         # Return None early for non-primary ranks if compute() returned None
-        if answers is None:
+        if response_data is None:
             return None
 
-        return {"model_id": model.model_identifier}
+        # Include all response data for post-processing
+        return {
+            "model_id": model.model_identifier,
+            "response_data": response_data
+        }
 
     def evaluate_responses(self, results: Dict[str, Any]) -> Dict[str, float]:
         """
         Evaluate model responses using GPT-4 judge.
 
         Args:
-            results: Dictionary containing model identifier
+            results: Dictionary containing model identifier and post-processed response data
 
         Returns:
             Dictionary containing evaluation metrics, or None for non-primary ranks
@@ -216,11 +233,29 @@ class MTBenchBenchmark(BaseBenchmark):
         if results is None:
             return None
 
-        # Load data
-        questions = load_questions(self.question_file, None, None)
-        if self.debug:
-            questions = questions[:2]
-            self.logger.info(f"Debug mode: using 2 examples")
+        # Save post-processed answers to file first
+        answer_file = self.answer_dir / f"{results['model_id']}.jsonl"
+        
+        # If file exists, remove it to avoid duplicate entries
+        if answer_file.exists():
+            answer_file.unlink()
+            
+        if "response_data" in results and "answers" in results["response_data"]:
+            self.logger.info("Writing post-processed answers to file")
+            for ans_json in results["response_data"]["answers"]:
+                with open(answer_file, "a") as f:
+                    f.write(json.dumps(ans_json) + "\n")
+                    
+        # Load data for evaluation
+        if "response_data" in results and "questions" in results["response_data"]:
+            questions = results["response_data"]["questions"]
+            if self.debug:
+                self.logger.info(f"Debug mode: using {len(questions)} examples")
+        else:
+            questions = load_questions(self.question_file, None, None)
+            if self.debug:
+                questions = questions[:2]
+                self.logger.info(f"Debug mode: using 2 examples")
 
         model_answers = load_model_answers(self.answer_dir)
         ref_answers = load_model_answers(self.ref_answer_dir)
@@ -329,15 +364,48 @@ class MTBenchBenchmark(BaseBenchmark):
         """
         self.logger.info("Starting MTBench evaluation")
         try:
+            # Generate responses
+            self.logger.info("Generating responses...")
             generation_results = self.generate_responses(model)
 
             # If not primary rank, return None early
             if generation_results is None:
                 return None
 
+            # Apply reasoning post-processing if enabled
+            if self.reasoning_postproc and self.postproc_model is not None:
+                self.logger.info("Applying reasoning post-processing to MTBench responses...")
+                try:
+                    processed_results = self.apply_reasoning_postprocessing(generation_results)
+                    self.logger.info("Post-processing complete")
+                    
+                    # Log some examples of before/after processing for debugging
+                    if "response_data" in generation_results and "response_data" in processed_results:
+                        orig_choices = generation_results["response_data"].get("choices", [])
+                        proc_choices = processed_results["response_data"].get("choices", [])
+                        
+                        if orig_choices and proc_choices and len(orig_choices) > 0 and len(proc_choices) > 0:
+                            # Log first example only
+                            orig_turn = orig_choices[0].get("turns", [])[0] if orig_choices[0].get("turns") else "No turn data"
+                            proc_turn = proc_choices[0].get("turns", [])[0] if proc_choices[0].get("turns") else "No turn data"
+                            
+                            self.logger.info(f"Original response example: {orig_turn[:100]}...")
+                            self.logger.info(f"Processed response example: {proc_turn[:100]}...")
+                    
+                    generation_results = processed_results
+                except Exception as e:
+                    self.logger.error(f"Error during post-processing: {str(e)}")
+                    self.logger.warning("Using original unprocessed responses")
+            else:
+                self.logger.info("Reasoning post-processing is disabled or not available")
+
+            # Evaluate responses
+            self.logger.info("Evaluating responses...")
             evaluation_results = self.evaluate_responses(generation_results)
             return evaluation_results
 
         except Exception as e:
             self.logger.error(f"Error running benchmark: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return {"error": str(e)}
