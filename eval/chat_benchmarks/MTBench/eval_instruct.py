@@ -242,6 +242,72 @@ class MTBenchBenchmark(BaseBenchmark):
         if results is None:
             return None
 
+        # Check if we need to apply reasoning post-processing
+        # This is important because the framework might be calling this method directly
+        # instead of going through run_benchmark where post-processing normally happens
+        if self.reasoning_postproc:
+            self.logger.info("Post-processing is enabled. Checking if it needs to be applied...")
+            try:
+                # Initialize the post-processing model if needed
+                if self._ensure_postproc_model_loaded():
+                    # Process the answer file
+                    model_id = results["model_id"]
+                    answer_file = self.answer_dir / f"{model_id}.jsonl"
+                    
+                    if answer_file.exists():
+                        # Check if file contains thinking tokens
+                        needs_processing = False
+                        with open(answer_file, "r") as f:
+                            for line in f:
+                                if "<think>" in line:
+                                    needs_processing = True
+                                    break
+                        
+                        if needs_processing:
+                            self.logger.info(f"Found thinking tokens in {answer_file}, applying post-processing...")
+                            
+                            # Load answers from disk
+                            with open(answer_file, "r") as f:
+                                answers = [json.loads(line) for line in f]
+                            
+                            # Process answers
+                            processed_answers = []
+                            for ans in answers:
+                                processed_ans = ans.copy()
+                                
+                                # Process each choice's turn content
+                                if "choices" in processed_ans:
+                                    for choice_idx, choice in enumerate(processed_ans["choices"]):
+                                        if "turns" in choice:
+                                            for turn_idx, turn_content in enumerate(choice["turns"]):
+                                                # Apply post-processing
+                                                processed_turn = self.apply_reasoning_postprocessing(turn_content)
+                                                processed_ans["choices"][choice_idx]["turns"][turn_idx] = processed_turn
+                                
+                                processed_answers.append(processed_ans)
+                            
+                            # Write processed answers back to file
+                            backup_file = self.answer_dir / f"{model_id}.original.jsonl"
+                            if not backup_file.exists():
+                                import shutil
+                                shutil.copy(answer_file, backup_file)
+                                self.logger.info(f"Backed up original answers to {backup_file}")
+                            
+                            with open(answer_file, "w") as f:
+                                for ans in processed_answers:
+                                    f.write(json.dumps(ans) + "\n")
+                            
+                            self.logger.info(f"Wrote post-processed answers back to {answer_file}")
+                        else:
+                            self.logger.info(f"No thinking tokens found in {answer_file}, skipping post-processing")
+                else:
+                    self.logger.warning("Could not load post-processing model, continuing with original responses")
+            except Exception as e:
+                self.logger.error(f"Error during post-processing: {str(e)}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                self.logger.warning("Continuing with original unprocessed responses")
+
         # Load data for evaluation - minimal memory footprint by loading directly from disk
         questions = load_questions(self.question_file, None, None)
         if self.debug:

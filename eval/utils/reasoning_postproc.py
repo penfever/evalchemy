@@ -271,17 +271,45 @@ def postprocess_object(
     """
     if logger is None:
         logger = logging.getLogger("reasoning_postproc")
+        
+    logger.info(f"postprocess_object called on type: {type(obj).__name__}")
     
     # Process strings
     if isinstance(obj, str):
-        return postprocess_reasoning(obj, postproc_model, logger, use_model)
+        # Check if string contains thinking tokens
+        has_thinking = "<think>" in obj
+        if has_thinking:
+            logger.info(f"Found thinking tokens in string, length: {len(obj)}")
+        
+        # Process the string
+        result = postprocess_reasoning(obj, postproc_model, logger, use_model)
+        
+        # Check if processing was effective
+        if has_thinking and "<think>" not in result:
+            logger.info("Successfully removed thinking tokens from string")
+        elif has_thinking and "<think>" in result:
+            logger.warning("Failed to remove thinking tokens from string")
+            
+        return result
     
     # Process lists
     elif isinstance(obj, list):
+        logger.info(f"Processing list with {len(obj)} items")
         return [postprocess_object(item, postproc_model, logger, use_model) for item in obj]
     
     # Process dictionaries
     elif isinstance(obj, dict):
+        logger.info(f"Processing dict with keys: {list(obj.keys())}")
+        
+        # Special handling for MTBench answer objects
+        if "choices" in obj and isinstance(obj["choices"], list):
+            logger.info("Found 'choices' key, this looks like an MTBench answer object")
+            for choice in obj.get("choices", []):
+                if "turns" in choice and isinstance(choice["turns"], list):
+                    for i, turn in enumerate(choice["turns"]):
+                        if isinstance(turn, str) and "<think>" in turn:
+                            logger.info(f"Found thinking tokens in turn {i}")
+        
         result = {}
         for key, value in obj.items():
             # Skip some metadata fields that shouldn't be modified
@@ -293,4 +321,5 @@ def postprocess_object(
     
     # Return other types unchanged
     else:
+        logger.info(f"Skipping object of type {type(obj).__name__}")
         return obj

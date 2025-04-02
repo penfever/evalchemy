@@ -180,19 +180,37 @@ class BaseBenchmark(ABC):
             Post-processed results with reasoning chains removed
         """
         if not self.reasoning_postproc:
+            self.logger.info("Post-processing is disabled, skipping")
             return results
             
         # Lazily load model if needed
         if not self._ensure_postproc_model_loaded():
+            self.logger.warning("Failed to load post-processing model, skipping")
             return results
             
         try:
             global postprocess_object
             if postprocess_object is None:
                 from eval.utils.reasoning_postproc import postprocess_object
-                
+                self.logger.info("Imported postprocess_object function")
+            
             self.logger.info(f"Applying reasoning post-processing for {self.__class__.__name__}")
-            return postprocess_object(results, self.postproc_model, self.logger)
+            
+            # If input is a string and contains thinking tokens, log it
+            if isinstance(results, str) and "<think>" in results:
+                self.logger.info(f"Found '<think>' tag in string to process, length: {len(results)}")
+                
+            # Apply post-processing
+            processed = postprocess_object(results, self.postproc_model, self.logger)
+            
+            # Check if post-processing was effective for string inputs
+            if isinstance(results, str) and isinstance(processed, str):
+                if "<think>" in results and "<think>" not in processed:
+                    self.logger.info("Successfully removed thinking tokens")
+                elif "<think>" in results and "<think>" in processed:
+                    self.logger.warning("Failed to remove thinking tokens")
+                    
+            return processed
         except Exception as e:
             self.logger.error(f"Error during reasoning post-processing: {str(e)}")
             self.logger.warning("Using original unprocessed responses")

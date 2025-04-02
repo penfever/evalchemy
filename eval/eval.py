@@ -166,39 +166,37 @@ def evaluate(
 
     # Reasoning post-processing is now handled by individual benchmarks
 
-    # Run benchmark evaluations - sequential generation, parallel evaluation
+    # Run benchmark evaluations - using run_benchmark to ensure post-processing happens
     if benchmark_tasks:
-        # Sequential generation since it's GPU-bound
-        generate_methods = task_manager.get_list_generate_responses(benchmark_tasks)
-        generation_results = []
+        # Sequential evaluation since it's GPU-bound
+        evaluation_results = []
         valid_tasks = []  # Keep track of valid tasks
-        for method, task, batch_size in zip(generate_methods, benchmark_tasks, benchmark_batch_sizes):
+        
+        for task, batch_size in zip(benchmark_tasks, benchmark_batch_sizes):
+            # Set the batch size for the model
             if args.model == "hf":
                 lm.batch_size_per_gpu = batch_size
             elif args.model == "vllm":
                 lm.batch_size = batch_size
-            result = method(lm)
-            if result is not None:  # Only keep valid results and their corresponding tasks
-                generation_results.append(result)
+                
+            # Get the benchmark instance
+            benchmark = task_manager.get_benchmark(task)
+            if benchmark is None:
+                eval_logger.warning(f"Benchmark not found: {task}")
+                continue
+                
+            # Run the benchmark - this will handle post-processing correctly
+            eval_logger.info(f"Running benchmark {task} with batch size {batch_size}")
+            result = benchmark.run_benchmark(lm)
+            
+            if result is not None:  # Only keep valid results
+                evaluation_results.append(result)
                 valid_tasks.append(task)
-        # Get evaluation methods only for valid tasks
-
-        if lm is not None and not hasattr(lm, "upload_to_hub"):
-            evaluate_methods = task_manager.get_list_evaluates(valid_tasks)
-            cpu_count = os.cpu_count()
-
-            max_workers = min(len(valid_tasks), cpu_count * 2)
-            if lm.world_size <= 1 or lm.rank == 0:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    evaluate_results = list(
-                        executor.map(
-                            lambda func_args: func_args[0](func_args[1]), zip(evaluate_methods, generation_results)
-                        )
-                    )
-
-                # Store results using valid tasks for correct mapping
-                for task, result in zip(valid_tasks, evaluate_results):
-                    results["results"][task] = result
+                
+        # Store results using valid tasks
+        if lm.world_size <= 1 or lm.rank == 0:
+            for task, result in zip(valid_tasks, evaluation_results):
+                results["results"][task] = result
 
     # Run pretrain evaluations if any exist
     if pretrain_tasks and args is not None:
