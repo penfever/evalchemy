@@ -503,8 +503,29 @@ class MTBenchBenchmark(BaseBenchmark):
                                                 if has_thinking and still_has_thinking:
                                                     print(f"DEBUG: WARNING - <think> tag still present after processing in turn {turn_idx}")
                                                     self.logger.warning(f"<think> tag still present after processing in turn {turn_idx}")
-                                                    # Emergency fallback - brute force removal
-                                                    processed_turn = processed_turn.replace("<think>", "").replace("</think>", "")
+                                                    
+                                                    # Emergency fallback - brute force removal with regex to preserve formatting
+                                                    import re
+                                                    patterns = [
+                                                        r'<think>.*?</think>',
+                                                        r'<thinking>.*?</thinking>',
+                                                        r'<thoughts>.*?</thoughts>',
+                                                        r'<thought>.*?</thought>',
+                                                        r'<Think>.*?</Think>',
+                                                        r'<Thinking>.*?</Thinking>',
+                                                        r'<Thoughts>.*?</Thoughts>',
+                                                        r'<Thought>.*?</Thought>',
+                                                    ]
+                                                    
+                                                    for pattern in patterns:
+                                                        if re.search(pattern, processed_turn, flags=re.DOTALL):
+                                                            print(f"DEBUG: Applying emergency pattern matching with {pattern}")
+                                                            processed_turn = re.sub(pattern, '', processed_turn, flags=re.DOTALL)
+                                                    
+                                                    # If still present after regex, use direct string replacement as last resort
+                                                    if "<think>" in processed_turn:
+                                                        print(f"DEBUG: CRITICAL - Still found <think> after regex, using direct replacement")
+                                                        processed_turn = processed_turn.replace("<think>", "").replace("</think>", "")
                                                     
                                                 # Replace the original content with the processed version
                                                 processed_ans["choices"][choice_idx]["turns"][turn_idx] = processed_turn

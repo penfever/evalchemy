@@ -190,9 +190,18 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
     Returns:
         str: Processed text with reasoning chains and self-references removed.
     """
+    # Debug logging to verify this function is getting called
+    print("DEBUG: process_with_model called")
+    logger.info("process_with_model called")
+    
     # Skip processing if input is not a string
     if not isinstance(text, str):
         return text
+    
+    # Debug logging for the input text
+    if "<think>" in text:
+        print(f"DEBUG: process_with_model received text with <think> tag: {text[:100]}...")
+        logger.info(f"process_with_model received text with <think> tag")
     
     # Move model to GPU if it's currently on CPU
     model = ensure_model_on_gpu(model, logger)
@@ -214,11 +223,26 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             {"role": "user", "content": prompt}
         ]
         
+        # Log that we're about to call the model
+        print("DEBUG: About to call reasoning postproc model")
+        logger.info("About to call reasoning postproc model")
+        
         # Generate response
         inputs = model.apply_chat_template(messages)
         response = model.generate_until([inputs])[0]
         
+        # Log model output
+        print(f"DEBUG: Reasoning postproc model generated response length: {len(response)}")
+        logger.info(f"Reasoning postproc model generated response length: {len(response)}")
+        
         if response and len(response) > 0:
+            if "<think>" in text and "<think>" not in response:
+                print("DEBUG: Successfully removed <think> tag via model processing")
+                logger.info("Successfully removed <think> tag via model processing")
+            elif "<think>" in text and "<think>" in response:
+                print("DEBUG: WARNING - <think> tag still present after model processing")
+                logger.warning("<think> tag still present after model processing")
+                
             return response.strip()
         else:
             logger.warning("Model produced empty response, returning original text")
@@ -254,21 +278,49 @@ def postprocess_reasoning(
     """
     if logger is None:
         logger = logging.getLogger("reasoning_postproc")
+        
+    # Debug to check function call
+    print(f"DEBUG: postprocess_reasoning called on text of length {len(text) if isinstance(text, str) else 'N/A'}")
+    logger.info(f"postprocess_reasoning called on text of length {len(text) if isinstance(text, str) else 'N/A'}")
     
     # Skip processing if input is not a string
     if not isinstance(text, str):
+        print("DEBUG: Text is not a string, skipping processing")
+        logger.info("Text is not a string, skipping processing")
         return text
     
     # First apply regex cleaning to remove thinking tokens
     cleaned_text = clean_thinking_tokens(text)
     
+    if text != cleaned_text:
+        print("DEBUG: Regex cleaning changed the text")
+        logger.info("Regex cleaning changed the text")
+    else:
+        print("DEBUG: Regex cleaning did not change the text")
+        logger.info("Regex cleaning did not change the text")
+    
     # If model is provided and use_model is True, also use model for more advanced processing
     if postproc_model is not None and use_model:
+        print(f"DEBUG: Using model '{postproc_model.model_identifier}' for advanced processing")
+        logger.info(f"Using model '{postproc_model.model_identifier}' for advanced processing")
         try:
-            return process_with_model(postproc_model, cleaned_text, logger)
+            model_processed = process_with_model(postproc_model, cleaned_text, logger)
+            print("DEBUG: Model processing completed")
+            logger.info("Model processing completed")
+            return model_processed
         except Exception as e:
             logger.error(f"Error during model post-processing: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return cleaned_text
+    else:
+        # Log why model is not being used
+        if postproc_model is None:
+            print("DEBUG: postproc_model is None, skipping model processing")
+            logger.info("postproc_model is None, skipping model processing")
+        if not use_model:
+            print("DEBUG: use_model is False, skipping model processing")
+            logger.info("use_model is False, skipping model processing")
     
     return cleaned_text
 
@@ -297,16 +349,42 @@ def postprocess_object(
     if logger is None:
         logger = logging.getLogger("reasoning_postproc")
     
+    # Debug to track function call
+    print(f"DEBUG: postprocess_object called on {type(obj).__name__}")
+    logger.info(f"postprocess_object called on {type(obj).__name__}")
+    
     # Process strings
     if isinstance(obj, str):
         return postprocess_reasoning(obj, postproc_model, logger, use_model)
     
     # Process lists
     elif isinstance(obj, list):
+        print(f"DEBUG: Processing list with {len(obj)} items")
+        logger.info(f"Processing list with {len(obj)} items")
         return [postprocess_object(item, postproc_model, logger, use_model) for item in obj]
     
     # Process dictionaries
     elif isinstance(obj, dict):
+        print(f"DEBUG: Processing dict with keys: {list(obj.keys())}")
+        logger.info(f"Processing dict with keys: {list(obj.keys())}")
+        
+        # Special handling for answer object with choices
+        if "choices" in obj and isinstance(obj["choices"], list):
+            print(f"DEBUG: Found choices in dict - this is likely an answer object")
+            logger.info(f"Found choices in dict - this is likely an answer object")
+            
+            # Handle each turn in the choices array directly
+            for choice in obj.get("choices", []):
+                if "turns" in choice and isinstance(choice["turns"], list):
+                    print(f"DEBUG: Found turns in choice, will process directly")
+                    logger.info(f"Found turns in choice, will process directly")
+                    
+                    # Check for thinking tags
+                    for turn_idx, turn in enumerate(choice["turns"]):
+                        if isinstance(turn, str) and "<think>" in turn:
+                            print(f"DEBUG: Found <think> tag in turn {turn_idx}")
+                            logger.info(f"Found <think> tag in turn {turn_idx}")
+        
         result = {}
         for key, value in obj.items():
             # Skip some metadata fields that shouldn't be modified
