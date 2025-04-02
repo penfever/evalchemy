@@ -147,26 +147,35 @@ class BaseBenchmark(ABC):
             bool: True if model is successfully loaded, False otherwise
         """
         if self.postproc_model is not None:
+            print(f"DEBUG: Post-processing model already loaded: {self.postproc_model.model_identifier}")
+            self.logger.info(f"Post-processing model already loaded: {self.postproc_model.model_identifier}")
             return True
             
         if not self.reasoning_postproc:
+            print(f"DEBUG: reasoning_postproc is set to {self.reasoning_postproc}, not loading model")
+            self.logger.info(f"reasoning_postproc is set to {self.reasoning_postproc}, not loading model")
             return False
             
         try:
             from eval.utils.reasoning_postproc import initialize_reasoning_postprocessor
+            print(f"DEBUG: Lazily loading reasoning post-processor model: {self.reasoning_postproc_model}")
             self.logger.info(f"Lazily loading reasoning post-processor model: {self.reasoning_postproc_model}")
             # Load model to CPU initially to save GPU memory
             self.postproc_model = initialize_reasoning_postprocessor(
                 self.reasoning_postproc_model, 
                 use_cpu=True
             )
-            self.logger.info(f"Post-processing model loaded to CPU")
+            print(f"DEBUG: Post-processing model loaded to CPU: {self.postproc_model.model_identifier}")
+            self.logger.info(f"Post-processing model loaded to CPU: {self.postproc_model.model_identifier}")
             return True
         except Exception as e:
+            print(f"DEBUG: Failed to initialize reasoning post-processor: {str(e)}")
             self.logger.error(f"Failed to initialize reasoning post-processor: {str(e)}")
             self.logger.warning("Continuing evaluation without reasoning post-processing")
             import traceback
-            self.logger.error(traceback.format_exc())
+            traceback_str = traceback.format_exc()
+            print(f"DEBUG: {traceback_str}")
+            self.logger.error(traceback_str)
             self.reasoning_postproc = False
             return False
             

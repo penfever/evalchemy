@@ -28,6 +28,8 @@ def initialize_reasoning_postprocessor(model_name: str, use_cpu: bool = True, **
     from lm_eval.api.registry import get_model
     from lm_eval.utils import sanitize_model_name
     
+    print(f"DEBUG: Initializing reasoning post-processor with model: {model_name}, use_cpu={use_cpu}")
+    
     # Default to bfloat16 if not specified
     if "dtype" not in model_kwargs:
         model_kwargs["dtype"] = "bfloat16"
@@ -49,13 +51,22 @@ def initialize_reasoning_postprocessor(model_name: str, use_cpu: bool = True, **
     if "low_cpu_mem_usage" not in model_kwargs and use_cpu:
         model_args += ",low_cpu_mem_usage=True"
         
-    lm = get_model("hf").create_from_arg_string(model_args, config)
-    lm.model_identifier = sanitize_model_name(f"model_hf_model_args_{model_args}")
+    print(f"DEBUG: Creating model with args: {model_args}, device: {device}")
     
-    # Store whether the model is currently on CPU
-    lm._is_on_cpu = use_cpu
-    
-    return lm
+    try:
+        lm = get_model("hf").create_from_arg_string(model_args, config)
+        lm.model_identifier = sanitize_model_name(f"model_hf_model_args_{model_args}")
+        
+        # Store whether the model is currently on CPU
+        lm._is_on_cpu = use_cpu
+        
+        print(f"DEBUG: Successfully initialized post-processor model: {lm.model_identifier}")
+        return lm
+    except Exception as e:
+        print(f"DEBUG: Error initializing post-processor model: {str(e)}")
+        import traceback
+        print(f"DEBUG: {traceback.format_exc()}")
+        raise
 
 def ensure_model_on_gpu(model: LM, logger: Optional[logging.Logger] = None) -> LM:
     """
