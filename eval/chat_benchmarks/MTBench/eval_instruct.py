@@ -390,8 +390,24 @@ class MTBenchBenchmark(BaseBenchmark):
                             # Process each answer file
                             processed_answers = []
                             for ans in answers:
-                                # Apply post-processing to each answer
-                                processed_ans = self.apply_reasoning_postprocessing(ans)
+                                # We need to target the nested content inside the choices array
+                                processed_ans = ans.copy()  # Make a copy to avoid modifying the original
+                                
+                                # Process each choice's turn content specifically
+                                if "choices" in processed_ans:
+                                    for choice_idx, choice in enumerate(processed_ans["choices"]):
+                                        if "turns" in choice:
+                                            # Process each turn in the choice
+                                            for turn_idx, turn_content in enumerate(choice["turns"]):
+                                                # Apply post-processing to the turn content (a string)
+                                                processed_turn = self.apply_reasoning_postprocessing(turn_content)
+                                                # Replace the original content with the processed version
+                                                processed_ans["choices"][choice_idx]["turns"][turn_idx] = processed_turn
+                                                
+                                                # Log the first turn's before/after for debugging
+                                                if choice_idx == 0 and turn_idx == 0:
+                                                    self.logger.info(f"Processed turn content from: {turn_content[:50]}... to: {processed_turn[:50]}...")
+                                
                                 processed_answers.append(processed_ans)
                         else:
                             self.logger.warning("Could not load post-processing model, using original answers")
