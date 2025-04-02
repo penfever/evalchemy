@@ -223,10 +223,31 @@ class BaseBenchmark(ABC):
         print(f"Running {self.__class__.__name__} benchmark")
         generation_results = self.generate_responses(model)
         
-        # Apply reasoning post-processing if enabled
+        # Try to release model resources before post-processing to free up VRAM
         if self.reasoning_postproc and generation_results is not None:
-            generation_results = self.apply_reasoning_postprocessing(generation_results)
-            
+            # First try to release VLLM resources if available (to free VRAM)
+            try:
+                if hasattr(model, "release_resources") and callable(model.release_resources):
+                    self.logger.info("Releasing main LLM resources to free VRAM before post-processing")
+                    model.release_resources()
+                
+                # Also try to clear CUDA cache
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        self.logger.info("Clearing CUDA cache before post-processing")
+                        torch.cuda.empty_cache()
+                except (ImportError, Exception) as e:
+                    self.logger.warning(f"Unable to clear CUDA cache: {str(e)}")
+                
+                # Apply reasoning post-processing
+                generation_results = self.apply_reasoning_postprocessing(generation_results)
+            except Exception as e:
+                self.logger.error(f"Error during pre-processing cleanup: {str(e)}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                # Continue without post-processing if cleanup fails
+        
         evaluation_results = self.evaluate_responses(generation_results)
         return evaluation_results
 

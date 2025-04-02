@@ -72,22 +72,44 @@ def ensure_model_on_gpu(model: LM, logger: Optional[logging.Logger] = None) -> L
         if logger:
             logger.info("Moving post-processing model from CPU to GPU for inference")
         
-        # Different model types need different approaches to move to GPU
-        if hasattr(model, 'model') and hasattr(model.model, 'to'):
-            model.model = model.model.to('cuda')
-            
-        elif hasattr(model, 'model') and hasattr(model.model, 'cuda'):
-            model.model.cuda()
-            
-        # Also move tokenizer to GPU if possible
-        if hasattr(model, 'tokenizer') and hasattr(model.tokenizer, 'to'):
-            try:
-                model.tokenizer = model.tokenizer.to('cuda')
-            except:
-                pass  # Ignore if tokenizer can't be moved
+        # First, try to free CUDA cache to reduce OOM risk
+        try:
+            import torch
+            if torch.cuda.is_available():
+                if logger:
+                    logger.info("Clearing CUDA cache before moving model to GPU")
+                torch.cuda.empty_cache()
+        except (ImportError, Exception) as e:
+            if logger:
+                logger.warning(f"Unable to clear CUDA cache: {str(e)}")
                 
-        # Mark as now on GPU
-        model._is_on_cpu = False
+        # Different model types need different approaches to move to GPU
+        try:
+            if hasattr(model, 'model') and hasattr(model.model, 'to'):
+                model.model = model.model.to('cuda')
+                
+            elif hasattr(model, 'model') and hasattr(model.model, 'cuda'):
+                model.model.cuda()
+                
+            # Also move tokenizer to GPU if possible
+            if hasattr(model, 'tokenizer') and hasattr(model.tokenizer, 'to'):
+                try:
+                    model.tokenizer = model.tokenizer.to('cuda')
+                except:
+                    pass  # Ignore if tokenizer can't be moved
+                    
+            # Mark as now on GPU
+            model._is_on_cpu = False
+            
+            if logger:
+                logger.info("Successfully moved post-processing model to GPU")
+                
+        except Exception as e:
+            if logger:
+                logger.error(f"Failed to move model to GPU: {str(e)}")
+                logger.warning("Will attempt to continue with model on CPU")
+                import traceback
+                logger.error(traceback.format_exc())
         
     return model
 
@@ -169,20 +191,27 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
     if not isinstance(text, str):
         return text
     
-    # Move model to GPU if it's currently on CPU
-    model = ensure_model_on_gpu(model, logger)
+    # Try using regex-based cleaning first to reduce reliance on model
+    cleaned_text = clean_thinking_tokens(text)
+    if cleaned_text != text:
+        logger.info("Successfully removed thinking tokens with regex, skipping model-based cleaning")
+        return cleaned_text
         
-    prompt = (
-        "You are a helpful assistant that cleans up text to remove internal reasoning chains and "
-        "self-referential language. Your task is to copy the entire response, but remove all internal "
-        "reasoning chains that are repetitive or that did not lead to the ultimate answer. Also remove "
-        "self-referential talk like 'wait', 'stop', 'I'm not sure', 'let's think', etc. Keep the final "
-        "answer and any essential context. Here is the text to clean up:\n\n"
-        f"{text}\n\n"
-        "Cleaned version (keep line breaks and formatting, just remove reasoning chains and self-references):"
-    )
-    
+    # If regex didn't help, try model-based cleaning
     try:
+        # Move model to GPU if it's currently on CPU
+        model = ensure_model_on_gpu(model, logger)
+            
+        prompt = (
+            "You are a helpful assistant that cleans up text to remove internal reasoning chains and "
+            "self-referential language. Your task is to copy the entire response, but remove all internal "
+            "reasoning chains that are repetitive or that did not lead to the ultimate answer. Also remove "
+            "self-referential talk like 'wait', 'stop', 'I'm not sure', 'let's think', etc. Keep the final "
+            "answer and any essential context. Here is the text to clean up:\n\n"
+            f"{text}\n\n"
+            "Cleaned version (keep line breaks and formatting, just remove reasoning chains and self-references):"
+        )
+        
         # Create messages in the format the model expects
         messages = [
             {"role": "system", "content": "You are a helpful assistant that cleans up text."},
@@ -237,9 +266,24 @@ def postprocess_reasoning(
     # First apply regex cleaning to remove thinking tokens
     cleaned_text = clean_thinking_tokens(text)
     
+    # If the regex cleaning was effective, avoid using the model to save resources
+    if cleaned_text != text and ("<think>" not in cleaned_text) and ("<thinking>" not in cleaned_text):
+        logger.info("Regex cleaning was effective, skipping model-based post-processing")
+        return cleaned_text
+    
     # If model is provided and use_model is True, also use model for more advanced processing
+    # But only if regex wasn't enough
     if postproc_model is not None and use_model:
         try:
+            # Clear CUDA cache before using model
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    logger.info("Clearing CUDA cache before model post-processing")
+                    torch.cuda.empty_cache()
+            except (ImportError, Exception) as e:
+                logger.warning(f"Unable to clear CUDA cache: {str(e)}")
+                
             return process_with_model(postproc_model, cleaned_text, logger)
         except Exception as e:
             logger.error(f"Error during model post-processing: {str(e)}")
