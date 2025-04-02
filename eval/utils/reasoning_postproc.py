@@ -207,6 +207,73 @@ def clean_thinking_tokens(text: str) -> str:
     return text.strip()
 
 
+def extract_thinking_content(text: str, logger: logging.Logger) -> (str, bool, str):
+    """
+    Extract the content inside thinking tokens, if any.
+    
+    Args:
+        text (str): The text to process
+        logger (logging.Logger): Logger for tracking progress and errors
+        
+    Returns:
+        tuple: (content inside thinking tokens, whether tokens were found, original text)
+    """
+    import re
+    found_thinking = False
+    
+    # Define all thinking token patterns
+    thinking_patterns = [
+        # HTML-style tags
+        (r'<think>(.*?)</think>', '<think>'),
+        (r'<thinking>(.*?)</thinking>', '<thinking>'),
+        (r'<thoughts>(.*?)</thoughts>', '<thoughts>'),
+        (r'<thought>(.*?)</thought>', '<thought>'),
+        (r'<Think>(.*?)</Think>', '<Think>'),
+        (r'<Thinking>(.*?)</Thinking>', '<Thinking>'),
+        (r'<Thoughts>(.*?)</Thoughts>', '<Thoughts>'),
+        (r'<Thought>(.*?)</Thought>', '<Thought>'),
+        
+        # Special separator style tags
+        (r'<\|begin_of_thought\|>(.*?)<\|end_of_thought\|>', '<|begin_of_thought|>'),
+        (r'<\|thinking\|>(.*?)<\|/thinking\|>', '<|thinking|>'),
+        (r'<\|thought\|>(.*?)<\|/thought\|>', '<|thought|>'),
+        (r'<\|thoughts\|>(.*?)<\|/thoughts\|>', '<|thoughts|>'),
+        
+        # Bracket style
+        (r'\[thinking\](.*?)\[/thinking\]', '[thinking]'),
+        (r'\[thought\](.*?)\[/thought\]', '[thought]'),
+        (r'\[thoughts\](.*?)\[/thoughts\]', '[thoughts]'),
+        (r'\[THINKING\](.*?)\[/THINKING\]', '[THINKING]'),
+        (r'\[THOUGHT\](.*?)\[/THOUGHT\]', '[THOUGHT]'),
+        (r'\[THOUGHTS\](.*?)\[/THOUGHTS\]', '[THOUGHTS]'),
+    ]
+    
+    thinking_content = ""
+    for pattern, tag_name in thinking_patterns:
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            found_thinking = True
+            logger.info(f"Found thinking content inside {tag_name} tags")
+            
+            # Concatenate all thinking content, preserving paragraph breaks
+            for match in matches:
+                if thinking_content:
+                    thinking_content += "\n\n"  # Add paragraph break between different thinking blocks
+                thinking_content += match.strip()
+                
+    if found_thinking:
+        # Clean up any nested thinking tags
+        for pattern, _ in thinking_patterns:
+            # Extract just the group pattern without the tags
+            clean_pattern = pattern.replace('(.*?)', '')
+            start_tag = clean_pattern.split(')')[0]
+            end_tag = clean_pattern.split('(')[1]
+            # Remove any remaining tags from the extracted content
+            thinking_content = thinking_content.replace(start_tag, '').replace(end_tag, '')
+    
+    return thinking_content, found_thinking, text
+
+
 def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
     """
     Process text with a model to remove reasoning chains and self-referential language.
@@ -223,11 +290,17 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
     if not isinstance(text, str):
         return text
     
-    # Try using regex-based cleaning first to reduce reliance on model
+    # First extract any thinking content
+    thinking_content, found_thinking, original_text = extract_thinking_content(text, logger)
+    
+    # If no thinking content was found, just do basic regex cleaning
+    if not found_thinking:
+        logger.info("No thinking tokens found, applying basic regex cleaning")
+        return clean_thinking_tokens(text)
+    
+    # If thinking content was found, do regex cleaning to remove the tags
     cleaned_text = clean_thinking_tokens(text)
-    if cleaned_text != text:
-        logger.info("Successfully removed thinking tokens with regex, skipping model-based cleaning")
-        return cleaned_text
+    logger.info("Using model to process thinking content even though regex cleaned the tags")
     
     # Check available GPU memory before trying model-based cleaning
     try:
@@ -239,29 +312,28 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             
             # If we have very little free VRAM, skip model-based cleaning
             if free_mem < 1.0:
-                logger.warning(f"Only {free_mem:.2f} GB free VRAM available - skipping model-based cleaning")
+                logger.warning(f"Only {free_mem:.2f} GB free VRAM available - using regex-only cleaning")
                 return cleaned_text
     except Exception as e:
         logger.warning(f"Unable to check GPU memory: {str(e)}")
     
-    # If regex didn't help, try model-based cleaning
+    # Process the thinking content with the model
     try:
         # Move model to GPU if it's currently on CPU
         model = ensure_model_on_gpu(model, logger)
             
         prompt = (
-            "You are a helpful assistant that cleans up text to remove internal reasoning chains and "
-            "self-referential language. Your task is to copy the entire response, but remove all internal "
-            "reasoning chains that are repetitive or that did not lead to the ultimate answer. Also remove "
-            "self-referential talk like 'wait', 'stop', 'I'm not sure', 'let's think', etc. Keep the final "
-            "answer and any essential context. Here is the text to clean up:\n\n"
-            f"{text}\n\n"
-            "Cleaned version (keep line breaks and formatting, just remove reasoning chains and self-references):"
+            "You are a helpful assistant that improves the quality of text. Your task is to refine this text "
+            "to be more coherent, concise, and focused. Remove redundancies, unnecessary explanations, and "
+            "self-referential language like 'wait', 'let me think', etc. Restructure the key points into a "
+            "clear, helpful response. Here is the text to improve:\n\n"
+            f"{thinking_content}\n\n"
+            "Improved version:"
         )
         
         # Create messages in the format the model expects
         messages = [
-            {"role": "system", "content": "You are a helpful assistant that cleans up text."},
+            {"role": "system", "content": "You are a helpful assistant that improves the quality of text."},
             {"role": "user", "content": prompt}
         ]
         
@@ -272,7 +344,8 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             # First get the templated input if possible
             try:
                 inputs = model.apply_chat_template(messages)
-            except:
+            except Exception as template_err:
+                logger.warning(f"Error applying chat template: {str(template_err)}")
                 # If apply_chat_template fails, use the prompt directly
                 inputs = prompt
                 
@@ -285,14 +358,14 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             )
             
             # Generate response
-            logger.info("Generating response using LLM for post-processing")
+            logger.info("Generating improved response using LLM for the thinking content")
             response = model.generate_until([instance])[0]
             
             if response and len(response) > 0:
-                logger.info("Successfully generated post-processed response with LLM")
+                logger.info("Successfully generated improved response with LLM")
                 return response.strip()
             else:
-                logger.warning("Model produced empty response, returning original text")
+                logger.warning("Model produced empty response, returning regex-cleaned text")
                 return cleaned_text
                 
         except Exception as e:
@@ -316,9 +389,9 @@ def postprocess_reasoning(
     """
     Post-process model response to clean up reasoning chains.
     
-    This function first applies regex patterns to remove thinking tokens,
-    then optionally uses a model to further clean up reasoning chains and
-    self-referential language.
+    This function extracts the content inside thinking tokens if present,
+    and uses a model to process this content. If no thinking tokens are found
+    or model processing fails, it falls back to regex-based cleaning.
     
     Args:
         text (str): The text to post-process.
@@ -327,7 +400,7 @@ def postprocess_reasoning(
         use_model (bool): Whether to use the model for advanced post-processing.
             
     Returns:
-        str: Post-processed text with reasoning chains removed.
+        str: Post-processed text with reasoning chains removed or improved.
     """
     if logger is None:
         logger = logging.getLogger("reasoning_postproc")
@@ -336,33 +409,50 @@ def postprocess_reasoning(
     if not isinstance(text, str):
         return text
     
-    # First apply regex cleaning to remove thinking tokens
-    cleaned_text = clean_thinking_tokens(text)
+    # Check if text contains thinking tokens
+    thinking_content, has_thinking, _ = extract_thinking_content(text, logger)
     
-    # If the regex cleaning was effective, avoid using the model to save resources
-    if cleaned_text != text and ("<think>" not in cleaned_text) and ("<thinking>" not in cleaned_text):
-        logger.info("Regex cleaning was effective, skipping model-based post-processing")
-        return cleaned_text
+    # If no thinking tokens were found, just return the original text
+    if not has_thinking:
+        logger.info("No thinking tokens found in text, returning as-is")
+        return text
+        
+    # If thinking tokens were found but we don't have a model or don't want to use it,
+    # fall back to regex cleaning
+    if postproc_model is None or not use_model:
+        logger.info("Thinking tokens found but no model available, using regex-only cleaning")
+        return clean_thinking_tokens(text)
     
-    # If model is provided and use_model is True, also use model for more advanced processing
-    # But only if regex wasn't enough
-    if postproc_model is not None and use_model:
+    # We found thinking tokens and have a model - process with the model
+    # Regardless of whether regex would be effective, we want to use the model
+    # to improve the content that was inside the thinking tags
+    logger.info("Thinking tokens found, using model to process the content")
+    
+    try:
+        # Clear CUDA cache before using model
         try:
-            # Clear CUDA cache before using model
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    logger.info("Clearing CUDA cache before model post-processing")
-                    torch.cuda.empty_cache()
-            except (ImportError, Exception) as e:
-                logger.warning(f"Unable to clear CUDA cache: {str(e)}")
+            import torch
+            if torch.cuda.is_available():
+                logger.info("Clearing CUDA cache before model post-processing")
+                torch.cuda.empty_cache()
+        except (ImportError, Exception) as e:
+            logger.warning(f"Unable to clear CUDA cache: {str(e)}")
+            
+        # Process with model
+        result = process_with_model(postproc_model, text, logger)
+        
+        # If result contains no thinking tokens, we succeeded
+        for pattern in ["<think>", "<thinking>", "<thought>", "[thinking]"]:
+            if pattern in result:
+                logger.warning(f"Model processing failed to remove {pattern} tags, applying regex cleanup")
+                return clean_thinking_tokens(result)
                 
-            return process_with_model(postproc_model, cleaned_text, logger)
-        except Exception as e:
-            logger.error(f"Error during model post-processing: {str(e)}")
-            return cleaned_text
-    
-    return cleaned_text
+        # Return model-processed result
+        return result
+    except Exception as e:
+        logger.error(f"Error during model post-processing: {str(e)}")
+        logger.warning("Falling back to regex-only cleaning")
+        return clean_thinking_tokens(text)
 
 
 def postprocess_object(
