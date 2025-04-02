@@ -105,10 +105,17 @@ def clean_thinking_tokens(text: str) -> str:
     # Skip cleaning if input is not a string
     if not isinstance(text, str):
         return text
+    
+    # For debugging - print only if <think> is found
+    if '<think>' in text:
+        print("DEBUG: Found <think> tag in text:", text[:50] + "..." if len(text) > 50 else text)
         
-    # Remove common thought markers
+    # Copy the original text for comparison
+    original_text = text
+        
+    # Remove common thought markers with non-greedy matching
     patterns = [
-        # HTML-style tags
+        # HTML-style tags - with debugging on pattern match
         r'<think>.*?</think>',
         r'<thinking>.*?</thinking>',
         r'<thoughts>.*?</thoughts>',
@@ -147,9 +154,27 @@ def clean_thinking_tokens(text: str) -> str:
         r'<\s*thought\s*>.*?<\s*/\s*thought\s*>',
     ]
     
+    # Try each pattern and log when it matches
     for pattern in patterns:
+        # Check if pattern matches before applying substitution
+        if re.search(pattern, text, flags=re.DOTALL):
+            print(f"DEBUG: Pattern '{pattern}' matched")
+            
+        # Apply the substitution
         text = re.sub(pattern, '', text, flags=re.DOTALL)
     
+    # Force a more aggressive approach for unmatched patterns (sometimes the closing tag might be malformed)
+    if '<think>' in text:
+        print("DEBUG: Still found <think> after pattern matching, trying aggressive replacement")
+        # More aggressive pattern that doesn't require closing tag
+        text = re.sub(r'<think>.*', '', text, flags=re.DOTALL)
+    
+    # For debugging - check if changed
+    if original_text != text and '<think>' in original_text:
+        print("DEBUG: Text changed after cleaning. Original had <think>, new text:", text[:50] + "..." if len(text) > 50 else text)
+    elif original_text == text and '<think>' in original_text:
+        print("DEBUG: WARNING - Text unchanged after cleaning but contains <think>")
+        
     return text.strip()
 
 

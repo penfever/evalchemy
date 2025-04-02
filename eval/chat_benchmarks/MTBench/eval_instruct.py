@@ -25,6 +25,8 @@ from fastchat.llm_judge.common import (
     play_a_match_single,
     NEED_REF_CATS,
     temperature_config,
+    MatchSingle,
+    MatchPair,
 )
 from fastchat.utils import str_to_torch_dtype
 from fastchat.llm_judge.gen_judgment import (
@@ -313,16 +315,104 @@ class MTBenchBenchmark(BaseBenchmark):
             )
         )
 
-        # Run evaluation
+        # Verify the model answers again just before evaluation
+        print(f"DEBUG: Verifying model answers just before evaluation")
+        model_id = results["model_id"]
+        answer_file = self.answer_dir / f"{model_id}.jsonl"
+        
+        if answer_file.exists():
+            thinking_tag_count = 0
+            with open(answer_file, "r") as f:
+                for line_num, line in enumerate(f):
+                    if "<think>" in line:
+                        print(f"DEBUG: ERROR - Found <think> tag just before evaluation at line {line_num}")
+                        thinking_tag_count += 1
+            
+            if thinking_tag_count > 0:
+                print(f"DEBUG: ERROR - Found {thinking_tag_count} <think> tags just before evaluation")
+                self.logger.error(f"Found {thinking_tag_count} <think> tags just before evaluation")
+            else:
+                print(f"DEBUG: SUCCESS - No <think> tags found just before evaluation")
+                self.logger.info(f"No <think> tags found just before evaluation")
+        
+        # Reload model answers to ensure we're using the latest post-processed version
+        print(f"DEBUG: Reloading model answers from disk to ensure latest post-processed version")
+        model_answers = load_model_answers(self.answer_dir)
+        
+        # Replace the model_answers dictionary with our freshly loaded version that contains processed data
+        # This is the critical step that ensures processed answers are used in judgments
+        
+        # Update all match objects with the freshly loaded model answers
+        print(f"DEBUG: Updating match objects with freshly loaded model answers")
+        updated_matches = []
+        for match in matches:
+            if isinstance(match, MatchSingle):
+                # For single matches, update the answer with freshly loaded one
+                model_id = match.model
+                q_id = match.question["question_id"]
+                if model_id in model_answers and q_id in model_answers[model_id]:
+                    # Create new match with updated answer
+                    updated_match = MatchSingle(
+                        match.question,
+                        match.model,
+                        model_answers[model_id][q_id],  # Use freshly loaded answer
+                        match.judge,
+                        match.ref_answer,
+                        match.multi_turn
+                    )
+                    updated_matches.append(updated_match)
+                    if "<think>" in str(match.answer):
+                        if "<think>" not in str(model_answers[model_id][q_id]):
+                            print(f"DEBUG: Successfully replaced answer with thinking tokens with processed version")
+                        else:
+                            print(f"DEBUG: WARNING - Thinking tokens still present in reloaded answer")
+                else:
+                    updated_matches.append(match)
+            elif isinstance(match, MatchPair):
+                # For pair matches, update both answers with freshly loaded ones
+                model1_id = match.model_1
+                model2_id = match.model_2
+                q_id = match.question["question_id"]
+                
+                answer1 = match.answer_1
+                answer2 = match.answer_2
+                
+                # Update answer1 if available
+                if model1_id in model_answers and q_id in model_answers[model1_id]:
+                    answer1 = model_answers[model1_id][q_id]
+                    
+                # Update answer2 if available
+                if model2_id in model_answers and q_id in model_answers[model2_id]:
+                    answer2 = model_answers[model2_id][q_id]
+                    
+                # Create new match with updated answers
+                updated_match = MatchPair(
+                    match.question,
+                    match.model_1,
+                    match.model_2,
+                    answer1,  # Use freshly loaded answer
+                    answer2,  # Use freshly loaded answer
+                    match.judge,
+                    match.ref_answer,
+                    match.multi_turn
+                )
+                updated_matches.append(updated_match)
+            else:
+                updated_matches.append(match)
+        
+        # Use the updated matches for evaluation
+        print(f"DEBUG: Using {len(updated_matches)} updated match objects for evaluation")
+        
+        # Run evaluation with updated matches
         if self.config.parallel == 1:
-            for match in tqdm(matches):
+            for match in tqdm(updated_matches):
                 play_a_match_func(match, output_file=output_file)
         else:
             with ThreadPoolExecutor(self.config.parallel) as executor:
                 list(
                     tqdm(
-                        executor.map(lambda m: play_a_match_func(m, output_file=output_file), matches),
-                        total=len(matches),
+                        executor.map(lambda m: play_a_match_func(m, output_file=output_file), updated_matches),
+                        total=len(updated_matches),
                     )
                 )
 
@@ -399,14 +489,30 @@ class MTBenchBenchmark(BaseBenchmark):
                                         if "turns" in choice:
                                             # Process each turn in the choice
                                             for turn_idx, turn_content in enumerate(choice["turns"]):
+                                                # Check for thinking tokens before processing
+                                                has_thinking = "<think>" in turn_content
+                                                if has_thinking:
+                                                    print(f"DEBUG: Found <think> tag in turn {turn_idx} before processing")
+                                                    self.logger.info(f"Found <think> tag in turn {turn_idx} before processing")
+                                                
                                                 # Apply post-processing to the turn content (a string)
                                                 processed_turn = self.apply_reasoning_postprocessing(turn_content)
+                                                
+                                                # Additional check for complete removal
+                                                still_has_thinking = "<think>" in processed_turn
+                                                if has_thinking and still_has_thinking:
+                                                    print(f"DEBUG: WARNING - <think> tag still present after processing in turn {turn_idx}")
+                                                    self.logger.warning(f"<think> tag still present after processing in turn {turn_idx}")
+                                                    # Emergency fallback - brute force removal
+                                                    processed_turn = processed_turn.replace("<think>", "").replace("</think>", "")
+                                                    
                                                 # Replace the original content with the processed version
                                                 processed_ans["choices"][choice_idx]["turns"][turn_idx] = processed_turn
                                                 
                                                 # Log the first turn's before/after for debugging
                                                 if choice_idx == 0 and turn_idx == 0:
                                                     self.logger.info(f"Processed turn content from: {turn_content[:50]}... to: {processed_turn[:50]}...")
+                                                    print(f"DEBUG: Processed turn content from: {turn_content[:50]}... to: {processed_turn[:50]}...")
                                 
                                 processed_answers.append(processed_ans)
                         else:
@@ -430,6 +536,22 @@ class MTBenchBenchmark(BaseBenchmark):
                         import os
                         os.replace(temp_answer_file, answer_file)
                         self.logger.info(f"Replaced original answers with processed answers")
+                        
+                        # Verify the file was actually updated and contains no thinking tags
+                        print(f"DEBUG: Verifying processed file {answer_file}")
+                        thinking_tag_count = 0
+                        with open(answer_file, "r") as f:
+                            for line_num, line in enumerate(f):
+                                if "<think>" in line:
+                                    print(f"DEBUG: ERROR - Found <think> tag in processed file at line {line_num}")
+                                    thinking_tag_count += 1
+                        
+                        if thinking_tag_count > 0:
+                            print(f"DEBUG: ERROR - Found {thinking_tag_count} <think> tags still in the processed file")
+                            self.logger.error(f"Found {thinking_tag_count} <think> tags still in the processed file")
+                        else:
+                            print(f"DEBUG: SUCCESS - No <think> tags found in processed file")
+                            self.logger.info(f"No <think> tags found in processed file")
                         
                         # Log example for debugging
                         if answers and processed_answers and len(answers) > 0 and len(processed_answers) > 0:
