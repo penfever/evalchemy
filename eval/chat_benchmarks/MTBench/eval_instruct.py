@@ -255,36 +255,91 @@ class MTBenchBenchmark(BaseBenchmark):
                     answer_file = self.answer_dir / f"{model_id}.jsonl"
                     
                     if answer_file.exists():
-                        # Check if file contains thinking tokens
+                        # Check if file contains any variation of thinking tokens
                         needs_processing = False
+                        
+                        # Define all thinking token patterns to check for
+                        thinking_patterns = [
+                            "<think>", "<thinking>", "<thoughts>", "<thought>",
+                            "<Think>", "<Thinking>", "<Thoughts>", "<Thought>",
+                            "<|thinking|>", "<|thought|>", "<|thoughts|>",
+                            "<|begin_of_thought|>", 
+                            "[thinking]", "[thought]", "[thoughts]",
+                            "[THINKING]", "[THOUGHT]", "[THOUGHTS]"
+                        ]
+                        
                         with open(answer_file, "r") as f:
-                            for line in f:
-                                if "<think>" in line:
-                                    needs_processing = True
-                                    break
+                            # If in debug mode, force processing of the first line
+                            if self.debug:
+                                self.logger.info("Debug mode enabled, forcing post-processing of the first line")
+                                needs_processing = True
+                            else:
+                                for line in f:
+                                    if any(pattern in line for pattern in thinking_patterns):
+                                        self.logger.info(f"Found thinking token pattern in file")
+                                        needs_processing = True
+                                        break
                         
                         if needs_processing:
-                            self.logger.info(f"Found thinking tokens in {answer_file}, applying post-processing...")
+                            self.logger.info(f"Applying post-processing to {answer_file}...")
                             
                             # Load answers from disk
                             with open(answer_file, "r") as f:
                                 answers = [json.loads(line) for line in f]
                             
+                            # Define the regex patterns for various thinking tokens
+                            from eval.utils.reasoning_postproc import clean_thinking_tokens
+                            
                             # Process answers
                             processed_answers = []
                             for ans in answers:
                                 processed_ans = ans.copy()
+                                has_thinking_tokens = False
                                 
                                 # Process each choice's turn content
                                 if "choices" in processed_ans:
                                     for choice_idx, choice in enumerate(processed_ans["choices"]):
                                         if "turns" in choice:
                                             for turn_idx, turn_content in enumerate(choice["turns"]):
-                                                # Apply post-processing
-                                                processed_turn = self.apply_reasoning_postprocessing(turn_content)
-                                                processed_ans["choices"][choice_idx]["turns"][turn_idx] = processed_turn
+                                                # Check if this turn contains thinking tokens
+                                                contains_thinking = any(pattern in turn_content for pattern in thinking_patterns)
+                                                
+                                                if contains_thinking or (self.debug and turn_idx == 0 and choice_idx == 0):
+                                                    has_thinking_tokens = True
+                                                    self.logger.info(f"Found thinking tokens in turn {turn_idx} of choice {choice_idx}")
+                                                    
+                                                    # For debugging, log a snippet of content before processing
+                                                    max_log_length = 100
+                                                    self.logger.info(f"Original content (first {max_log_length} chars): " + 
+                                                                     turn_content[:max_log_length] + "...")
+                                                    
+                                                    # Apply post-processing - first try regex-based cleaning
+                                                    processed_turn = clean_thinking_tokens(turn_content)
+                                                    
+                                                    # If regex didn't remove everything, use model-based cleanup
+                                                    if processed_turn == turn_content or any(pattern in processed_turn for pattern in thinking_patterns):
+                                                        self.logger.info("Regex cleaning wasn't fully effective, applying model-based post-processing")
+                                                        processed_turn = self.apply_reasoning_postprocessing(turn_content)
+                                                    
+                                                    # Log sample of processed result
+                                                    self.logger.info(f"Processed content (first {max_log_length} chars): " + 
+                                                                     processed_turn[:max_log_length] + "...")
+                                                    
+                                                    # Update the processed answer
+                                                    processed_ans["choices"][choice_idx]["turns"][turn_idx] = processed_turn
+                                                else:
+                                                    # No thinking tokens, keep original
+                                                    self.logger.debug(f"No thinking tokens in turn {turn_idx}, keeping original")
                                 
                                 processed_answers.append(processed_ans)
+                                
+                                # In debug mode, log the first answer's before/after for verification
+                                if self.debug and processed_ans == processed_answers[0]:
+                                    self.logger.info(f"Debug information for first answer (ID: {processed_ans.get('question_id', 'unknown')})")
+                                    if has_thinking_tokens:
+                                        self.logger.info("Post-processing was applied to this answer")
+                                    else:
+                                        self.logger.info("No thinking tokens found, original content was preserved")
                             
                             # Write processed answers back to file
                             backup_file = self.answer_dir / f"{model_id}.original.jsonl"
