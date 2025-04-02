@@ -372,7 +372,9 @@ class MTBenchBenchmark(BaseBenchmark):
             # Phase 2: Load model answers from disk for post-processing
             # This completely separates generation from post-processing,
             # avoiding any need to keep the main model and post-processing model in memory simultaneously
-            if self.reasoning_postproc and self.postproc_model is not None:
+            print("Reasoning postproc: ", self.reasoning_postproc)
+            print("Postproc model: ", self.postproc_model)
+            if self.reasoning_postproc:
                 self.logger.info("Applying reasoning post-processing to MTBench responses...")
                 try:
                     # Read answer files instead of keeping them in memory
