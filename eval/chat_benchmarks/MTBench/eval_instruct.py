@@ -117,15 +117,22 @@ class MTBenchBenchmark(BaseBenchmark):
         if self.reasoning_postproc:
             self.logger.info(f"MTBench reasoning post-processing is enabled with model: {self.reasoning_postproc_model}")
 
-    def get_model_answers(self, model: LM, model_id: str, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Generate model answers for all questions."""
+    def get_model_answers(self, model: LM, model_id: str, questions: List[Dict[str, Any]]) -> Optional[bool]:
+        """
+        Generate model answers for all questions and save directly to disk.
+        
+        Returns True on success, None on non-primary ranks, or False on error.
+        """
         # Initialize tracking structures
         all_convs = [[] for _ in questions]
         all_choices = [{"index": 0, "turns": []} for _ in questions]
-        all_answers = []  # Store the complete answer objects
 
         max_turns = max(len(q["turns"]) for q in questions)
         answer_file = self.answer_dir / f"{model_id}.jsonl"
+        
+        # If primary rank and file exists, remove it to avoid duplicates
+        if model.rank == 0 and answer_file.exists():
+            answer_file.unlink()
 
         # Process each turn
         for turn_num in range(max_turns):
@@ -171,7 +178,7 @@ class MTBenchBenchmark(BaseBenchmark):
             if model.rank != 0:
                 continue
 
-            # Save completed conversations
+            # Save completed conversations immediately to disk (for memory efficiency)
             for q_idx, question in enumerate(questions):
                 if turn_num == len(question["turns"]) - 1:
                     ans_json = {
@@ -181,10 +188,12 @@ class MTBenchBenchmark(BaseBenchmark):
                         "choices": [all_choices[q_idx]],
                         "tstamp": time.time(),
                     }
-                    # Store complete answer objects for post-processing
-                    all_answers.append(ans_json)
+                    # Write directly to file instead of storing in memory
+                    with open(answer_file, "a") as f:
+                        f.write(json.dumps(ans_json) + "\n")
 
-        return {"choices": all_choices, "answers": all_answers, "questions": questions}
+        # Return None for non-primary ranks, True for success on primary rank
+        return True if model.rank == 0 else None
 
     def generate_responses(self, model: LM) -> Dict[str, Any]:
         """
@@ -194,7 +203,7 @@ class MTBenchBenchmark(BaseBenchmark):
             model: Language model instance
 
         Returns:
-            Dictionary containing model responses and metadata, or None for non-primary ranks
+            Dictionary containing model identifier, or None for non-primary ranks
         """
         # Load questions
         questions = load_questions(self.question_file, self.config.question_begin, self.config.question_end)
@@ -206,17 +215,17 @@ class MTBenchBenchmark(BaseBenchmark):
         # Shuffle questions for better load balancing
         random.shuffle(questions)
 
-        # Generate answers
-        response_data = self.get_model_answers(model=model, model_id=model.model_identifier, questions=questions)
+        # Generate answers and write directly to disk
+        # We minimize in-memory storage for VRAM efficiency
+        _ = self.get_model_answers(model=model, model_id=model.model_identifier, questions=questions)
 
         # Return None early for non-primary ranks if compute() returned None
-        if response_data is None:
+        if _ is None:
             return None
 
-        # Include all response data for post-processing
+        # Only return minimal data needed for evaluation
         return {
-            "model_id": model.model_identifier,
-            "response_data": response_data
+            "model_id": model.model_identifier
         }
 
     def evaluate_responses(self, results: Dict[str, Any]) -> Dict[str, float]:
@@ -224,7 +233,7 @@ class MTBenchBenchmark(BaseBenchmark):
         Evaluate model responses using GPT-4 judge.
 
         Args:
-            results: Dictionary containing model identifier and post-processed response data
+            results: Dictionary containing model identifier
 
         Returns:
             Dictionary containing evaluation metrics, or None for non-primary ranks
@@ -233,29 +242,11 @@ class MTBenchBenchmark(BaseBenchmark):
         if results is None:
             return None
 
-        # Save post-processed answers to file first
-        answer_file = self.answer_dir / f"{results['model_id']}.jsonl"
-        
-        # If file exists, remove it to avoid duplicate entries
-        if answer_file.exists():
-            answer_file.unlink()
-            
-        if "response_data" in results and "answers" in results["response_data"]:
-            self.logger.info("Writing post-processed answers to file")
-            for ans_json in results["response_data"]["answers"]:
-                with open(answer_file, "a") as f:
-                    f.write(json.dumps(ans_json) + "\n")
-                    
-        # Load data for evaluation
-        if "response_data" in results and "questions" in results["response_data"]:
-            questions = results["response_data"]["questions"]
-            if self.debug:
-                self.logger.info(f"Debug mode: using {len(questions)} examples")
-        else:
-            questions = load_questions(self.question_file, None, None)
-            if self.debug:
-                questions = questions[:2]
-                self.logger.info(f"Debug mode: using 2 examples")
+        # Load data for evaluation - minimal memory footprint by loading directly from disk
+        questions = load_questions(self.question_file, None, None)
+        if self.debug:
+            questions = questions[:2]
+            self.logger.info(f"Debug mode: using 2 examples")
 
         model_answers = load_model_answers(self.answer_dir)
         ref_answers = load_model_answers(self.ref_answer_dir)
@@ -364,42 +355,84 @@ class MTBenchBenchmark(BaseBenchmark):
         """
         self.logger.info("Starting MTBench evaluation")
         try:
-            # Generate responses
+            # Phase 1: Generate responses with main model
+            # This minimizes memory usage during the main LLM generation phase
             self.logger.info("Generating responses...")
             generation_results = self.generate_responses(model)
 
             # If not primary rank, return None early
             if generation_results is None:
                 return None
+                
+            # Release VLLM resources before starting post-processing (if possible)
+            if hasattr(model, "release_resources") and callable(model.release_resources):
+                self.logger.info("Releasing VLLM model resources to free VRAM...")
+                model.release_resources()
 
-            # Apply reasoning post-processing if enabled
+            # Phase 2: Load model answers from disk for post-processing
+            # This completely separates generation from post-processing,
+            # avoiding any need to keep the main model and post-processing model in memory simultaneously
             if self.reasoning_postproc and self.postproc_model is not None:
                 self.logger.info("Applying reasoning post-processing to MTBench responses...")
                 try:
-                    processed_results = self.apply_reasoning_postprocessing(generation_results)
-                    self.logger.info("Post-processing complete")
+                    # Read answer files instead of keeping them in memory
+                    model_id = generation_results["model_id"]
+                    answer_file = self.answer_dir / f"{model_id}.jsonl"
                     
-                    # Log some examples of before/after processing for debugging
-                    if "response_data" in generation_results and "response_data" in processed_results:
-                        orig_choices = generation_results["response_data"].get("choices", [])
-                        proc_choices = processed_results["response_data"].get("choices", [])
-                        
-                        if orig_choices and proc_choices and len(orig_choices) > 0 and len(proc_choices) > 0:
-                            # Log first example only
-                            orig_turn = orig_choices[0].get("turns", [])[0] if orig_choices[0].get("turns") else "No turn data"
-                            proc_turn = proc_choices[0].get("turns", [])[0] if proc_choices[0].get("turns") else "No turn data"
+                    if answer_file.exists():
+                        # Load answers from disk
+                        self.logger.info(f"Loading answers from {answer_file}")
+                        with open(answer_file, "r") as f:
+                            answers = [json.loads(line) for line in f]
                             
-                            self.logger.info(f"Original response example: {orig_turn[:100]}...")
-                            self.logger.info(f"Processed response example: {proc_turn[:100]}...")
-                    
-                    generation_results = processed_results
+                        # Process each answer file
+                        processed_answers = []
+                        for ans in answers:
+                            # Apply post-processing to each answer
+                            processed_ans = self.apply_reasoning_postprocessing(ans)
+                            processed_answers.append(processed_ans)
+                            
+                        # Create a temporary file for the processed answers
+                        temp_answer_file = self.answer_dir / f"{model_id}.processed.jsonl"
+                        with open(temp_answer_file, "w") as f:
+                            for ans in processed_answers:
+                                f.write(json.dumps(ans) + "\n")
+                                
+                        # Backup original answers
+                        backup_file = self.answer_dir / f"{model_id}.original.jsonl"
+                        if not backup_file.exists():  # Only backup if not already backed up
+                            import shutil
+                            shutil.copy(answer_file, backup_file)
+                            self.logger.info(f"Backed up original answers to {backup_file}")
+                            
+                        # Replace original with processed
+                        import os
+                        os.replace(temp_answer_file, answer_file)
+                        self.logger.info(f"Replaced original answers with processed answers")
+                        
+                        # Log example for debugging
+                        if answers and processed_answers and len(answers) > 0 and len(processed_answers) > 0:
+                            try:
+                                # Extract first response from original and processed answers
+                                orig_turns = answers[0]["choices"][0]["turns"] if "choices" in answers[0] else []
+                                proc_turns = processed_answers[0]["choices"][0]["turns"] if "choices" in processed_answers[0] else []
+                                
+                                if orig_turns and proc_turns:
+                                    self.logger.info(f"Original response example: {orig_turns[0][:100]}...")
+                                    self.logger.info(f"Processed response example: {proc_turns[0][:100]}...")
+                            except (KeyError, IndexError) as e:
+                                self.logger.warning(f"Could not extract example responses: {e}")
+                    else:
+                        self.logger.warning(f"Answer file {answer_file} does not exist, skipping post-processing")
                 except Exception as e:
                     self.logger.error(f"Error during post-processing: {str(e)}")
                     self.logger.warning("Using original unprocessed responses")
+                    import traceback
+                    self.logger.error(traceback.format_exc())
             else:
                 self.logger.info("Reasoning post-processing is disabled or not available")
 
-            # Evaluate responses
+            # Phase 3: Evaluate responses
             self.logger.info("Evaluating responses...")
             evaluation_results = self.evaluate_responses(generation_results)
             return evaluation_results
