@@ -82,7 +82,7 @@ class MTBenchBenchmark(BaseBenchmark):
         Args:
             base_path: Base directory for MTBench data and outputs
             config: MTBench configuration object
-            debug: If True, run in debug mode on 2 samples
+            debug: If True, run in debug mode on 10 samples
             logger: Optional logger instance
             system_instruction: Optional system instruction for the model
             reasoning_postproc: Whether to enable reasoning post-processing
@@ -209,8 +209,8 @@ class MTBenchBenchmark(BaseBenchmark):
         questions = load_questions(self.question_file, self.config.question_begin, self.config.question_end)
 
         if self.debug:
-            questions = questions[:2]
-            self.logger.info("Debug mode: using first 2 questions")
+            questions = questions[:10]
+            self.logger.info("Debug mode: using first 10 questions")
 
         # Shuffle questions for better load balancing
         random.shuffle(questions)
@@ -311,8 +311,8 @@ class MTBenchBenchmark(BaseBenchmark):
         # Load data for evaluation - minimal memory footprint by loading directly from disk
         questions = load_questions(self.question_file, None, None)
         if self.debug:
-            questions = questions[:2]
-            self.logger.info(f"Debug mode: using 2 examples")
+            questions = questions[:10]
+            self.logger.info(f"Debug mode: using 10 examples")
 
         model_answers = load_model_answers(self.answer_dir)
         ref_answers = load_model_answers(self.ref_answer_dir)
