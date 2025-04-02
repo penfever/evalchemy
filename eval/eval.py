@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import time
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any, Callable
 
 import lm_eval.api.metrics
 import lm_eval.api.registry
@@ -28,6 +28,7 @@ from eval.chat_benchmarks.upload_to_hf_lm import UploadInstancesToHF  # register
 from eval.constants import LIST_OPENAI_MODELS
 from eval.eval_tracker import DCEvaluationTracker
 from eval.task import TaskManager as InstructTaskManager
+from eval.utils.reasoning_postproc import initialize_reasoning_postprocessor
 
 
 def setup_custom_parser():
@@ -89,6 +90,20 @@ def setup_custom_parser():
         action="store_true",
         help="Run evalutaions in debug mode on a few examples",
     )
+    
+    # Add new reasoning postprocessing arguments
+    reasoning_group = parser.add_argument_group("reasoning")
+    reasoning_group.add_argument(
+        "--reasoning-postproc",
+        action="store_true",
+        help="Enable reasoning post-processing to clean up model responses before scoring",
+    )
+    reasoning_group.add_argument(
+        "--reasoning-postproc-model",
+        type=str,
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help="Model to use for reasoning post-processing",
+    )
     return parser
 
 
@@ -148,6 +163,8 @@ def evaluate(
         eval_logger.info(f"Pretrain tasks to evaluate: {pretrain_tasks}")
 
     results = {"results": {}}
+
+    # Reasoning post-processing is now handled by individual benchmarks
 
     # Run benchmark evaluations - sequential generation, parallel evaluation
     if benchmark_tasks:
@@ -289,6 +306,11 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         args.tasks = ",".join([t["task_name"] for t in tasks_yaml["tasks"]])
         batch_sizes_list = [int(t["batch_size"]) if t["batch_size"] != "auto" else "auto" for t in tasks_yaml["tasks"]]
         args.annotator_model = tasks_yaml.get("annotator_model", args.annotator_model)
+        # Add reasoning postprocessing options from config if available
+        if "reasoning_postproc" in tasks_yaml:
+            args.reasoning_postproc = tasks_yaml["reasoning_postproc"]
+        if "reasoning_postproc_model" in tasks_yaml:
+            args.reasoning_postproc_model = tasks_yaml["reasoning_postproc_model"]
     else:
         batch_sizes_list = [
             int(args.batch_size) if args.batch_size != "auto" else args.batch_size
@@ -331,6 +353,8 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
         seed=args.seed,
         task_list=task_list,
         system_instruction=args.system_instruction,
+        reasoning_postproc=getattr(args, 'reasoning_postproc', False),
+        reasoning_postproc_model=getattr(args, 'reasoning_postproc_model', "Qwen/Qwen2.5-7B-Instruct"),
     )
     pretrain_task_manager = PretrainTaskManager(args.verbosity, include_path=args.include_path)
 
@@ -437,6 +461,8 @@ def initialize_model(
             Only used if model is provided as a string. Defaults to None.
         device (Optional[str], optional):
             Device to load the model on (e.g., 'cuda', 'cpu'). Defaults to None.
+        batch_size (Optional[int], optional):
+            Batch size for the model. Defaults to None.
 
     Returns:
         LM:
@@ -464,6 +490,9 @@ def initialize_model(
 
     lm.model_identifier = sanitize_model_name(f"model_{model}_model_args_{model_args}")
     return lm
+
+
+# Import the reasoning post-processing utility from the new module
 
 
 def add_results_metadata(results: Dict, batch_sizes_list: List[int], args: argparse.Namespace, lm: LM) -> None:
@@ -508,6 +537,11 @@ def add_results_metadata(results: Dict, batch_sizes_list: List[int], args: argpa
         "torch_seed": args.seed[2],
         "fewshot_seed": args.seed[3],
     }
+    
+    # Add reasoning postprocessing configuration if enabled
+    if hasattr(args, 'reasoning_postproc') and args.reasoning_postproc:
+        results["config"]["reasoning_postproc"] = args.reasoning_postproc
+        results["config"]["reasoning_postproc_model"] = args.reasoning_postproc_model
 
     if isinstance(lm, lm_eval.models.huggingface.HFLM):
         results["config"].update(lm.get_model_info())

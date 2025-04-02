@@ -15,13 +15,39 @@ import torch.distributed as dist
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
 
+# Import at module level to avoid circular imports
+try:
+    from eval.utils.reasoning_postproc import postprocess_object
+except ImportError:
+    postprocess_object = None
+
 
 class BaseBenchmark(ABC):
     """Abstract base class for implementing LLM evaluation benchmarks."""
 
-    def __init__(self, logger: Optional[logging.Logger] = None, system_instruction: Optional[str] = None):
+    def __init__(
+        self, 
+        logger: Optional[logging.Logger] = None, 
+        system_instruction: Optional[str] = None,
+        reasoning_postproc: bool = False,
+        reasoning_postproc_model: str = "Qwen/Qwen2.5-7B-Instruct",
+    ):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.system_instruction = system_instruction
+        self.reasoning_postproc = reasoning_postproc
+        self.reasoning_postproc_model = reasoning_postproc_model 
+        self.postproc_model = None
+        
+        # Initialize post-processing model if needed
+        if self.reasoning_postproc:
+            try:
+                from eval.utils.reasoning_postproc import initialize_reasoning_postprocessor
+                self.logger.info(f"Initializing reasoning post-processor with model: {self.reasoning_postproc_model}")
+                self.postproc_model = initialize_reasoning_postprocessor(self.reasoning_postproc_model)
+            except Exception as e:
+                self.logger.error(f"Failed to initialize reasoning post-processor: {str(e)}")
+                self.logger.warning("Continuing evaluation without reasoning post-processing")
+                self.reasoning_postproc = False
 
     def _normalize_model_args(self, model: LM, instances: List[Instance]) -> List[Instance]:
         for instance in instances:
@@ -118,10 +144,39 @@ class BaseBenchmark(ABC):
         """Evaluate the model's responses according to the benchmark's metrics."""
         pass
 
+    def apply_reasoning_postprocessing(self, results: Any) -> Any:
+        """Apply reasoning post-processing to benchmark results if enabled.
+        
+        Args:
+            results: The results to post-process
+            
+        Returns:
+            Post-processed results with reasoning chains removed
+        """
+        if not self.reasoning_postproc or self.postproc_model is None:
+            return results
+            
+        try:
+            global postprocess_object
+            if postprocess_object is None:
+                from eval.utils.reasoning_postproc import postprocess_object
+                
+            self.logger.info(f"Applying reasoning post-processing for {self.__class__.__name__}")
+            return postprocess_object(results, self.postproc_model, self.logger)
+        except Exception as e:
+            self.logger.error(f"Error during reasoning post-processing: {str(e)}")
+            self.logger.warning("Using original unprocessed responses")
+            return results
+    
     def run_benchmark(self, model: LM) -> Dict[str, float]:
         """Run the complete benchmark evaluation pipeline."""
         print(f"Running {self.__class__.__name__} benchmark")
         generation_results = self.generate_responses(model)
+        
+        # Apply reasoning post-processing if enabled
+        if self.reasoning_postproc and generation_results is not None:
+            generation_results = self.apply_reasoning_postprocessing(generation_results)
+            
         evaluation_results = self.evaluate_responses(generation_results)
         return evaluation_results
 
@@ -133,7 +188,12 @@ class TaskManager:
     """
 
     def __init__(
-        self, benchmarks_dir: str = "chat_benchmarks", task_list: Optional[List[str]] = None, **benchmark_kwargs
+        self, 
+        benchmarks_dir: str = "chat_benchmarks", 
+        task_list: Optional[List[str]] = None, 
+        reasoning_postproc: bool = False,
+        reasoning_postproc_model: str = "Qwen/Qwen2.5-7B-Instruct",
+        **benchmark_kwargs
     ):
         self.logger = logging.getLogger("TaskManager")
         self.tasks: Dict[str, Any] = {}
@@ -141,6 +201,13 @@ class TaskManager:
         self.benchmark_kwargs = benchmark_kwargs
         self.task_list = task_list
         self.list_of_tasks_that_require_annotator_model = []
+        
+        # Add reasoning post-processing parameters to benchmark kwargs
+        self.benchmark_kwargs["reasoning_postproc"] = reasoning_postproc
+        self.benchmark_kwargs["reasoning_postproc_model"] = reasoning_postproc_model
+        
+        if reasoning_postproc:
+            self.logger.info(f"Reasoning post-processing enabled with model: {reasoning_postproc_model}")
 
         # Load benchmarks from directory
         self._load_benchmarks(benchmarks_dir)
