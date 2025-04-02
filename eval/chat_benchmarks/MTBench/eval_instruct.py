@@ -385,12 +385,17 @@ class MTBenchBenchmark(BaseBenchmark):
                         with open(answer_file, "r") as f:
                             answers = [json.loads(line) for line in f]
                             
-                        # Process each answer file
-                        processed_answers = []
-                        for ans in answers:
-                            # Apply post-processing to each answer
-                            processed_ans = self.apply_reasoning_postprocessing(ans)
-                            processed_answers.append(processed_ans)
+                        # Ensure the post-processing model is loaded only once we need it
+                        if self._ensure_postproc_model_loaded():
+                            # Process each answer file
+                            processed_answers = []
+                            for ans in answers:
+                                # Apply post-processing to each answer
+                                processed_ans = self.apply_reasoning_postprocessing(ans)
+                                processed_answers.append(processed_ans)
+                        else:
+                            self.logger.warning("Could not load post-processing model, using original answers")
+                            processed_answers = answers
                             
                         # Create a temporary file for the processed answers
                         temp_answer_file = self.answer_dir / f"{model_id}.processed.jsonl"

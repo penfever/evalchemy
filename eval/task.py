@@ -38,16 +38,11 @@ class BaseBenchmark(ABC):
         self.reasoning_postproc_model = reasoning_postproc_model 
         self.postproc_model = None
         
-        # Initialize post-processing model if needed
+        # We no longer initialize the post-processing model here
+        # It will be loaded lazily when needed to avoid using GPU memory
         if self.reasoning_postproc:
-            try:
-                from eval.utils.reasoning_postproc import initialize_reasoning_postprocessor
-                self.logger.info(f"Initializing reasoning post-processor with model: {self.reasoning_postproc_model}")
-                self.postproc_model = initialize_reasoning_postprocessor(self.reasoning_postproc_model)
-            except Exception as e:
-                self.logger.error(f"Failed to initialize reasoning post-processor: {str(e)}")
-                self.logger.warning("Continuing evaluation without reasoning post-processing")
-                self.reasoning_postproc = False
+            self.logger.info(f"Reasoning post-processing enabled with model: {self.reasoning_postproc_model}")
+            self.logger.info(f"Post-processing model will be loaded on demand to save GPU memory")
 
     def _normalize_model_args(self, model: LM, instances: List[Instance]) -> List[Instance]:
         for instance in instances:
@@ -144,6 +139,37 @@ class BaseBenchmark(ABC):
         """Evaluate the model's responses according to the benchmark's metrics."""
         pass
 
+    def _ensure_postproc_model_loaded(self) -> bool:
+        """
+        Lazily load the post-processing model if it hasn't been loaded yet.
+        
+        Returns:
+            bool: True if model is successfully loaded, False otherwise
+        """
+        if self.postproc_model is not None:
+            return True
+            
+        if not self.reasoning_postproc:
+            return False
+            
+        try:
+            from eval.utils.reasoning_postproc import initialize_reasoning_postprocessor
+            self.logger.info(f"Lazily loading reasoning post-processor model: {self.reasoning_postproc_model}")
+            # Load model to CPU initially to save GPU memory
+            self.postproc_model = initialize_reasoning_postprocessor(
+                self.reasoning_postproc_model, 
+                use_cpu=True
+            )
+            self.logger.info(f"Post-processing model loaded to CPU")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to initialize reasoning post-processor: {str(e)}")
+            self.logger.warning("Continuing evaluation without reasoning post-processing")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            self.reasoning_postproc = False
+            return False
+            
     def apply_reasoning_postprocessing(self, results: Any) -> Any:
         """Apply reasoning post-processing to benchmark results if enabled.
         
@@ -153,7 +179,11 @@ class BaseBenchmark(ABC):
         Returns:
             Post-processed results with reasoning chains removed
         """
-        if not self.reasoning_postproc or self.postproc_model is None:
+        if not self.reasoning_postproc:
+            return results
+            
+        # Lazily load model if needed
+        if not self._ensure_postproc_model_loaded():
             return results
             
         try:
@@ -166,6 +196,8 @@ class BaseBenchmark(ABC):
         except Exception as e:
             self.logger.error(f"Error during reasoning post-processing: {str(e)}")
             self.logger.warning("Using original unprocessed responses")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return results
     
     def run_benchmark(self, model: LM) -> Dict[str, float]:

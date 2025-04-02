@@ -12,12 +12,14 @@ from typing import Any, Dict, List, Optional, Union
 from lm_eval.api.model import LM
 
 
-def initialize_reasoning_postprocessor(model_name: str, **model_kwargs) -> LM:
+def initialize_reasoning_postprocessor(model_name: str, use_cpu: bool = True, **model_kwargs) -> LM:
     """
     Initialize a model for reasoning post-processing.
     
     Args:
         model_name (str): Name of the model to use for post-processing.
+        use_cpu (bool): Whether to load the model on CPU initially to save GPU memory.
+            If True, the model is loaded to CPU and will be moved to GPU when needed.
         **model_kwargs: Additional arguments to pass to the model initialization.
             
     Returns:
@@ -39,10 +41,55 @@ def initialize_reasoning_postprocessor(model_name: str, **model_kwargs) -> LM:
     for key, value in model_kwargs.items():
         model_args += f",{key}={value}"
     
-    config = {"device": "cuda"}
+    # Load to CPU initially to avoid VRAM usage until needed
+    device = "cpu" if use_cpu else "cuda"
+    config = {"device": device}
+    
+    # Set low_cpu_mem_usage to True for more efficient CPU loading
+    if "low_cpu_mem_usage" not in model_kwargs and use_cpu:
+        model_args += ",low_cpu_mem_usage=True"
+        
     lm = get_model("hf").create_from_arg_string(model_args, config)
     lm.model_identifier = sanitize_model_name(f"model_hf_model_args_{model_args}")
+    
+    # Store whether the model is currently on CPU
+    lm._is_on_cpu = use_cpu
+    
     return lm
+
+def ensure_model_on_gpu(model: LM, logger: Optional[logging.Logger] = None) -> LM:
+    """
+    Ensure the model is moved to GPU before using it.
+    
+    Args:
+        model: The model to ensure is on GPU
+        logger: Optional logger for debugging
+        
+    Returns:
+        The model, now on GPU if it wasn't already
+    """
+    if hasattr(model, '_is_on_cpu') and model._is_on_cpu:
+        if logger:
+            logger.info("Moving post-processing model from CPU to GPU for inference")
+        
+        # Different model types need different approaches to move to GPU
+        if hasattr(model, 'model') and hasattr(model.model, 'to'):
+            model.model = model.model.to('cuda')
+            
+        elif hasattr(model, 'model') and hasattr(model.model, 'cuda'):
+            model.model.cuda()
+            
+        # Also move tokenizer to GPU if possible
+        if hasattr(model, 'tokenizer') and hasattr(model.tokenizer, 'to'):
+            try:
+                model.tokenizer = model.tokenizer.to('cuda')
+            except:
+                pass  # Ignore if tokenizer can't be moved
+                
+        # Mark as now on GPU
+        model._is_on_cpu = False
+        
+    return model
 
 
 def clean_thinking_tokens(text: str) -> str:
@@ -91,6 +138,9 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
     # Skip processing if input is not a string
     if not isinstance(text, str):
         return text
+    
+    # Move model to GPU if it's currently on CPU
+    model = ensure_model_on_gpu(model, logger)
         
     prompt = (
         "You are a helpful assistant that cleans up text to remove internal reasoning chains and "
@@ -120,6 +170,8 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             return text
     except Exception as e:
         logger.error(f"Error processing with model: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return text
 
 
