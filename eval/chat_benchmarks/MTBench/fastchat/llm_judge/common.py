@@ -102,17 +102,48 @@ def load_model_answers(answer_dir: str):
     The return value is a python dict of type:
     Dict[model_name: str -> Dict[question_id: int -> answer: dict]]
     """
+    import logging
+    logger = logging.getLogger("load_model_answers")
+    
+    # Force reload by clearing any disk caches
+    import os
+    
+    # Get all jsonl files (both original and processed)
     filenames = glob.glob(os.path.join(answer_dir, "*.jsonl"))
+    
+    # Filter out backup files
+    filenames = [f for f in filenames if not f.endswith(".original.jsonl")]
     filenames.sort()
+    
     model_answers = {}
-
+    
     for filename in filenames:
         model_name = os.path.basename(filename)[:-6]
         answer = {}
+        
+        # Open the file with no caching
+        # This ensures we get the latest version after post-processing
+        try:
+            # Clear any OS-level file caches if possible
+            if hasattr(os, 'posix_fadvise') and hasattr(os, 'POSIX_FADV_DONTNEED'):
+                with open(filename, 'rb') as fd:
+                    os.posix_fadvise(fd.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        except (AttributeError, OSError):
+            pass  # Not available on all systems
+            
         with open(filename) as fin:
             for line in fin:
-                line = json.loads(line)
-                answer[line["question_id"]] = line
+                line_data = json.loads(line)
+                answer[line_data["question_id"]] = line_data
+                
+                # Check if this answer has thinking tokens as a sanity check
+                if "choices" in line_data:
+                    for choice in line_data["choices"]:
+                        if "turns" in choice:
+                            for turn in choice["turns"]:
+                                if isinstance(turn, str) and "<think>" in turn:
+                                    logger.warning(f"Found thinking tokens in model {model_name}, question {line_data['question_id']}")
+                    
         model_answers[model_name] = answer
 
     return model_answers

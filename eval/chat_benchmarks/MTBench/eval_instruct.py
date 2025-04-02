@@ -335,9 +335,9 @@ class MTBenchBenchmark(BaseBenchmark):
                                                     self.logger.info(f"Original content (first {max_log_length} chars): " + 
                                                                      turn_content[:max_log_length] + "...")
                                                     
-                                                    # Apply post-processing using regex-based cleaning
-                                                    # We'll skip model-based cleaning since we're having OOM issues
-                                                    processed_turn = clean_thinking_tokens(turn_content)
+                                                    # Apply post-processing with full functionality
+                                                    # We'll use both regex and model-based cleaning if possible
+                                                    processed_turn = self.apply_reasoning_postprocessing(turn_content)
                                                     
                                                     # Log sample of processed result
                                                     self.logger.info(f"Processed content (first {max_log_length} chars): " + 
@@ -371,6 +371,14 @@ class MTBenchBenchmark(BaseBenchmark):
                                     f.write(json.dumps(ans) + "\n")
                             
                             self.logger.info(f"Wrote post-processed answers back to {answer_file}")
+
+                            # IMPORTANT: Flush writes to disk to ensure they're visible to subsequent reads
+                            try:
+                                import os
+                                os.fsync(f.fileno())
+                                self.logger.info("Flushed file writes to disk")
+                            except Exception as flush_err:
+                                self.logger.warning(f"Error flushing file to disk: {str(flush_err)}")
                         else:
                             self.logger.info(f"No thinking tokens found in {answer_file}, skipping post-processing")
                 else:
@@ -387,6 +395,8 @@ class MTBenchBenchmark(BaseBenchmark):
             questions = questions[:10]
             self.logger.info(f"Debug mode: using 10 examples")
 
+        # Reload model answers from disk to ensure we're using the processed versions
+        self.logger.info("Loading model answers from disk (including processed versions)")
         model_answers = load_model_answers(self.answer_dir)
         ref_answers = load_model_answers(self.ref_answer_dir)
         judge_prompts = load_judge_prompts(self.config.judge_file)
