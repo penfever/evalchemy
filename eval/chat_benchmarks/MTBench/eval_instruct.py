@@ -456,6 +456,7 @@ class MTBenchBenchmark(BaseBenchmark):
             # Save the processed answers to a different file for comparison
             if model.rank == 0:
                 answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
+                import time
                 with open(answer_file, "w") as f:
                     for q_idx, question in enumerate(questions):
                         if q_idx < len(answers):
