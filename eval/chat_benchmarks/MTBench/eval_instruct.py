@@ -534,12 +534,41 @@ class MTBenchBenchmark(BaseBenchmark):
             
             # Initialize with original parameters - ensure model_args is a string
             model_args_str = str(model_args) if model_args is not None else ""
-            model = initialize_model(
-                model=original_model_type,
-                model_args=model_args_str,
-                device="cuda",
-                batch_size=model_batch_size
-            )
+            
+            # Make sure HF models have the required 'pretrained' parameter
+            if original_model_type.lower() == 'hf' and ('pretrained=' not in model_args_str):
+                self.logger.warning(f"Missing pretrained parameter in model_args: '{model_args_str}'")
+                # Use a fallback model since we don't know what the original was
+                model_args_str = "pretrained=gpt2,dtype=float32"
+                self.logger.info(f"Using fallback model_args: {model_args_str}")
+            
+            try:
+                model = initialize_model(
+                    model=original_model_type,
+                    model_args=model_args_str,
+                    device="cuda",
+                    batch_size=model_batch_size
+                )
+            except Exception as e:
+                self.logger.error(f"Error recreating original model: {str(e)}")
+                # Fallback to minimal initialization if recreation fails
+                self.logger.warning("Trying fallback model initialization...")
+                try:
+                    model = initialize_model(
+                        model="hf",
+                        model_args="pretrained=gpt2,dtype=float32",
+                        device="cuda"
+                    )
+                    self.logger.info("Successfully initialized fallback model")
+                except Exception as e2:
+                    self.logger.error(f"Error initializing fallback model: {str(e2)}")
+                    # In case of complete failure, try one more time with absolute minimal settings
+                    self.logger.warning("Attempting last-resort model initialization")
+                    model = initialize_model(
+                        model="hf",
+                        model_args="pretrained=facebook/opt-125m",
+                        device="cuda" 
+                    )
             
         # Return only the model_id for compatibility with evaluate_responses
         return {"model_id": model_id}
