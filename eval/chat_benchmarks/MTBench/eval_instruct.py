@@ -287,6 +287,7 @@ class MTBenchBenchmark(BaseBenchmark):
                 # More aggressive memory cleanup
                 import gc
                 gc.collect()
+                import torch
                 if torch.cuda.is_available():
                     # Empty cache multiple times
                     for _ in range(3):
