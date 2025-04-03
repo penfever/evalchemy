@@ -278,8 +278,79 @@ class MTBenchBenchmark(BaseBenchmark):
             print("Model methods: ", dir(model.model))
             print("Model type: ", type(model.model))
             
+            # Try a drastic approach: explicitly release all VLLM components
+            if hasattr(model, 'model') and hasattr(model.model, 'llm_engine'):
+                self.logger.info("Attempting forceful VLLM memory cleanup")
+                vllm_obj = model.model
+                try:
+                    # Try to access block manager to release memory blocks
+                    if hasattr(vllm_obj.llm_engine, 'block_manager'):
+                        self.logger.info("Attempting to free VLLM block manager memory")
+                        if hasattr(vllm_obj.llm_engine.block_manager, 'free_all_blocks'):
+                            self.logger.info("Calling free_all_blocks")
+                            vllm_obj.llm_engine.block_manager.free_all_blocks()
+                        
+                    # Try to explicitly destroy cache managers
+                    if hasattr(vllm_obj.llm_engine, 'cache_manager'):
+                        self.logger.info("Resetting cache manager")
+                        vllm_obj.llm_engine.cache_manager = None
+                    
+                    # Try to wake up and then force termination
+                    if hasattr(vllm_obj, 'wake_up') and callable(vllm_obj.wake_up):
+                        self.logger.info("Waking up engine to reset state")
+                        vllm_obj.wake_up()
+                    
+                    # Force clean cache if possible
+                    if hasattr(vllm_obj, 'reset_prefix_cache') and callable(vllm_obj.reset_prefix_cache):
+                        self.logger.info("Forcing prefix cache reset multiple times")
+                        for _ in range(3):
+                            vllm_obj.reset_prefix_cache()
+                except Exception as e:
+                    self.logger.warning(f"Error in forceful VLLM memory cleanup: {e}")
+            
+            # Try the regular cleanup
             cleanup_model(model)
             
+            # Try the nuclear option: force all cuda caches to reset
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    import os
+                    # Set environment variables to restrict memory usage for next model
+                    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
+                    
+                    # Force CUDA synchronization and reset
+                    torch.cuda.synchronize()
+                    for device in range(torch.cuda.device_count()):
+                        torch.cuda.set_device(device)
+                        torch.cuda.empty_cache()
+                    
+                    # On some systems we can explicitly release device memory
+                    if hasattr(torch.cuda, 'memory_deallocate'):
+                        self.logger.info("Explicitly deallocating all CUDA memory")
+                        torch.cuda.memory_deallocate()
+            except Exception as e:
+                self.logger.warning(f"Error in CUDA memory reset: {e}")
+            
+            # Last resort: try to force a GPU reset by briefly switching to CPU
+            # This will at least detect if there's a memory leak
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    # Create a small dummy tensor on CPU then GPU to test memory
+                    self.logger.info("Creating test tensor to verify GPU memory availability")
+                    test_tensor = torch.zeros((1, 1), device="cpu")
+                    try:
+                        # Try to move to GPU - this will fail if we're truly out of memory
+                        test_tensor = test_tensor.cuda()
+                        self.logger.info("Successfully created test tensor on GPU")
+                        del test_tensor
+                    except RuntimeError as e:
+                        self.logger.error(f"Failed to allocate test tensor: {e}")
+                        self.logger.error("GPU memory is not being properly freed!")
+            except Exception as e:
+                self.logger.warning(f"Error testing GPU memory: {e}")
+                
             # Initialize the postprocessing model using the same strategy as the original model
             self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")
             
