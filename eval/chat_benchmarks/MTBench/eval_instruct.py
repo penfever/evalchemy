@@ -19,7 +19,7 @@ from lm_eval.api.model import LM
 from eval.task import BaseBenchmark
 from eval.eval import move_model_to_device, initialize_model
 from eval.constants import THINK_PATTERNS as patterns
-from eval.distributed.launch import cleanup_vllm
+from eval.distributed.launch import cleanup_model
 from fastchat.llm_judge.common import (
     load_questions,
     load_model_answers,
@@ -275,31 +275,10 @@ class MTBenchBenchmark(BaseBenchmark):
             
             # Clean up the model manually rather than trying to move it
             self.logger.info(f"Cleaning up main model ({original_model_type})")
+            print("Model methods: ", dir(model))
+            print("Model type: ", type(model))
             
-            # For VLLM models, try to shutdown the engine if possible
-            if original_model_type.lower() == 'vllm':
-                cleanup_vllm(model)        
-            # For other models, just delete the object
-            else:
-                # Delete the model
-                del model
-                
-                # More aggressive memory cleanup
-                import gc
-                gc.collect()
-                import torch
-                if torch.cuda.is_available():
-                    # Empty cache multiple times
-                    for _ in range(3):
-                        torch.cuda.empty_cache()
-                    
-                    # Try to reset peak memory stats
-                    if hasattr(torch.cuda, 'reset_peak_memory_stats'):
-                        torch.cuda.reset_peak_memory_stats()
-                        
-                    # Try a more aggressive approach
-                    if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
-                        torch.cuda.reset_accumulated_memory_stats()
+            cleanup_model(model)
             
             # Initialize the postprocessing model using the same strategy as the original model
             self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")

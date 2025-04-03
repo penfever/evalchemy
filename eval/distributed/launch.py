@@ -16,9 +16,9 @@ from huggingface_hub import HfApi, snapshot_download
 
 colorama.init()
 
-def cleanup_vllm(model):
+def cleanup_model(model):
     """
-    Clean up the vLLM model to free up resources.
+    Clean up the vLLM or hf model to free up resources.
     """
     if hasattr(model, 'llm_engine') and model.llm_engine is not None:
         if hasattr(model.llm_engine, 'scheduler') and model.llm_engine.scheduler is not None:
@@ -40,11 +40,19 @@ def cleanup_vllm(model):
     
     # Clear CUDA cache
     import torch
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()              
+        # Try to reset peak memory stats
+        if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+            torch.cuda.reset_peak_memory_stats()
+            
+        # Try a more aggressive approach
+        if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
+            torch.cuda.reset_accumulated_memory_stats()
     
-    # For distributed setups, you might need to destroy process group
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
+        # For distributed setups, you might need to destroy process group
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
 
 def print_colored(text, color=Fore.WHITE, style=Style.NORMAL, end="\n"):
     """Print text with color and style."""
