@@ -19,6 +19,7 @@ from lm_eval.api.model import LM
 from eval.task import BaseBenchmark
 from eval.eval import move_model_to_device, initialize_model
 from eval.constants import THINK_PATTERNS as patterns
+from eval.distributed.launch import cleanup_vllm
 from fastchat.llm_judge.common import (
     load_questions,
     load_model_answers,
@@ -271,38 +272,21 @@ class MTBenchBenchmark(BaseBenchmark):
             
         # If we need postprocessing, initialize the postprocessing model
         if needs_postprocessing:
-            # First move the main model to CPU to free up GPU memory
-            self.logger.info(f"Moving main model to CPU to free up GPU memory")
             
             # Clean up the model manually rather than trying to move it
             self.logger.info(f"Cleaning up main model ({original_model_type})")
             
             # For VLLM models, try to shutdown the engine if possible
-            if original_model_type.lower() == 'vllm' and hasattr(model, 'engine') and hasattr(model.engine, 'shutdown'):
-                try:
-                    self.logger.info("Detected VLLM model, shutting down engine")
-                    model.engine.shutdown()
-                except Exception as e:
-                    self.logger.warning(f"Failed to shutdown VLLM engine: {e}")
-                    
-            # Try to call any available cleanup methods
-            for cleanup_method in ['close', 'cleanup', 'shutdown', 'terminate']:
-                if hasattr(model, cleanup_method) and callable(getattr(model, cleanup_method)):
-                    try:
-                        self.logger.info(f"Calling {cleanup_method}() method")
-                        getattr(model, cleanup_method)()
-                    except Exception as e:
-                        self.logger.warning(f"Error calling {cleanup_method}(): {e}")
-            
-            # Delete the model
-            del model
-            
-            # More aggressive memory cleanup
-            import gc
-            gc.collect()
-            
-            try:
-                import torch
+            if original_model_type.lower() == 'vllm':
+                cleanup_vllm(model)        
+            # For other models, just delete the object
+            else:
+                # Delete the model
+                del model
+                
+                # More aggressive memory cleanup
+                import gc
+                gc.collect()
                 if torch.cuda.is_available():
                     # Empty cache multiple times
                     for _ in range(3):
@@ -315,12 +299,6 @@ class MTBenchBenchmark(BaseBenchmark):
                     # Try a more aggressive approach
                     if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
                         torch.cuda.reset_accumulated_memory_stats()
-            except (ImportError, AttributeError) as e:
-                self.logger.warning(f"Error clearing CUDA memory: {e}")
-                
-            # Try to sleep a bit to allow OS to reclaim memory
-            import time
-            time.sleep(1)
             
             # Initialize the postprocessing model using the same strategy as the original model
             self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")
