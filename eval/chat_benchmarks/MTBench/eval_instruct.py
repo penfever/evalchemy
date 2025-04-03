@@ -463,22 +463,21 @@ class MTBenchBenchmark(BaseBenchmark):
                     
                     # Update the answer with the processed response
                     choice["turns"][turn_idx] = processed_response
-            
-            # Save the processed answers to a different file for comparison
-            if model.rank == 0:
-                answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
-                import time
-                with open(answer_file, "w") as f:
-                    for q_idx, question in enumerate(questions):
-                        if q_idx < len(answers):
-                            ans_json = {
-                                "question_id": question["question_id"],
-                                "answer_id": shortuuid.uuid(),
-                                "model_id": model_id,
-                                "choices": [answers[q_idx]],
-                                "tstamp": time.time(),
-                            }
-                            f.write(json.dumps(ans_json) + "\n")
+                    print(f"Processed response for question {q_idx}, turn {turn_idx}: {processed_response}")
+        
+            answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
+            import time
+            with open(answer_file, "w") as f:
+                for q_idx, question in enumerate(questions):
+                    if q_idx < len(answers):
+                        ans_json = {
+                            "question_id": question["question_id"],
+                            "answer_id": shortuuid.uuid(),
+                            "model_id": model_id,
+                            "choices": [answers[q_idx]],
+                            "tstamp": time.time(),
+                        }
+                        f.write(json.dumps(ans_json) + "\n")
             
             # Clean up the postprocessing model to free up GPU memory
             self.logger.info("Cleaning up postprocessing model")
@@ -539,7 +538,7 @@ class MTBenchBenchmark(BaseBenchmark):
             if original_model_type.lower() == 'hf' and ('pretrained=' not in model_args_str):
                 self.logger.warning(f"Missing pretrained parameter in model_args: '{model_args_str}'")
                 # Use a fallback model since we don't know what the original was
-                model_args_str = "pretrained=Qwen/Qwen2.5-7B-Instruct,dtype=float32"
+                model_args_str = "pretrained=Qwen/Qwen2.5-7B-Instruct,dtype=bfloat16"
                 self.logger.info(f"Using fallback model_args: {model_args_str}")
             
             try:
