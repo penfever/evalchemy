@@ -408,6 +408,9 @@ class MTBenchBenchmark(BaseBenchmark):
             
             # Process each response
             self.logger.info("Postprocessing responses with thinking tokens")
+            from copy import deepcopy
+            new_responses = deepcopy(answers)
+            did_process = False
             
             for choice_idx, choice in enumerate(answers):
                 for turn_idx, turn_response in enumerate(choice["turns"]):
@@ -416,15 +419,14 @@ class MTBenchBenchmark(BaseBenchmark):
                     # Look for thinking tokens using each pattern
                     for pattern in patterns:
                         matches = list(re.finditer(pattern, processed_response, re.DOTALL))
-                        
+                        if len(matches) > 0:
+                            did_process = True
+                        else:
+                            did_process = False
                         # Process from end to beginning to avoid messing up indices
                         for match in reversed(matches):
                             start, end = match.span()
                             thinking_block = processed_response[start:end]
-                            
-                            # Skip very short thinking blocks (likely false positives)
-                            if len(thinking_block) < 20:
-                                continue
                                 
                             # Prepare prompt for the postprocessing model
                             prompt_messages = [
@@ -461,20 +463,34 @@ class MTBenchBenchmark(BaseBenchmark):
                             # Replace the thinking block with cleaned output
                             processed_response = processed_response[:start] + cleaned_thinking + processed_response[end:]
                     
+                    old_resp = choice["turns"][turn_idx]
                     # Update the answer with the processed response
                     choice["turns"][turn_idx] = processed_response
-                    print(f"Processed response for question {choice_idx}, turn {turn_idx}: {processed_response}")
-        
+                    if did_process:
+                        print(f"Processed response for question {choice_idx}, turn {turn_idx}: \n Original: {old_resp} \n Revised: {processed_response}")
+                new_responses[choice_idx] = choice
+                if did_process:
+                    # Check if the response was actually modified instead of using an assertion
+                    if str(new_responses[choice_idx]) == str(answers[choice_idx]):
+                        self.logger.warning(f"Response for question {choice_idx} was processed but doesn't appear different from original")
+                    else:
+                        self.logger.info(f"Successfully processed response for question {choice_idx}")
+                        # Calculate how much the response changed (percentage of characters)
+                        orig_len = sum(len(t) for t in answers[choice_idx]["turns"])
+                        proc_len = sum(len(t) for t in new_responses[choice_idx]["turns"])
+                        change_pct = abs(proc_len - orig_len) / orig_len * 100 if orig_len > 0 else 0
+                        self.logger.info(f"Response length changed by {change_pct:.2f}% (from {orig_len} to {proc_len} chars)")
+
             answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
             import time
             with open(answer_file, "w") as f:
                 for q_idx, question in enumerate(questions):
-                    if q_idx < len(answers):
+                    if q_idx < len(new_responses):
                         ans_json = {
                             "question_id": question["question_id"],
                             "answer_id": shortuuid.uuid(),
                             "model_id": model_id,
-                            "choices": [answers[q_idx]],
+                            "choices": [new_responses[q_idx]],
                             "tstamp": time.time(),
                         }
                         f.write(json.dumps(ans_json) + "\n")
