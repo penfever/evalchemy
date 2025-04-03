@@ -142,7 +142,6 @@ class BaseBenchmark(ABC):
             Dictionary containing the generated responses
         """
         # Default implementation just calls generate_responses
-        print("we called generate and postproc")
         return self.generate_responses(model)
 
     @abstractmethod

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import shortuuid
 import torch.distributed as dist
+import re
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
 from eval.task import BaseBenchmark
+from eval.eval import move_model_to_device, initialize_model
 from fastchat.llm_judge.common import (
     load_questions,
     load_model_answers,
@@ -200,14 +202,208 @@ class MTBenchBenchmark(BaseBenchmark):
         if answers is None:
             return None
 
-        return {"model_id": model.model_identifier}
+        return {"model_id": model.model_identifier, "answers": answers, "questions": questions}
+        
+    def generate_and_postprocess_responses(self, model: LM) -> Dict[str, Any]:
+        """
+        Generate responses for MTBench questions and postprocess thinking tokens.
+        
+        This method:
+        1. Calls generate_responses to get model answers
+        2. Detects thinking tokens (e.g., <thinking>...</thinking>) in the responses
+        3. Uses a separate model to clean up the thinking blocks
+        4. Returns the processed results
+        
+        Args:
+            model: Language model instance
+            
+        Returns:
+            Dictionary containing model identifier and processed answers, or None for non-primary ranks
+        """
+        # Call the regular generate_responses method
+        result = self.generate_responses(model)
+        
+        # Return None early for non-primary ranks if generate_responses returned None
+        if result is None:
+            return None
+            
+        # Extract answers and questions
+        model_id = result["model_id"]
+        answers = result["answers"]
+        questions = result["questions"]
+        
+        # Define patterns to detect thinking tokens
+        patterns = [
+            # HTML-style tags
+            r'<think>.*?</think>',
+            r'<thinking>.*?</thinking>',
+            r'<thoughts>.*?</thoughts>',
+            r'<thought>.*?</thought>',
+            r'<Think>.*?</Think>',
+            r'<Thinking>.*?</Thinking>',
+            r'<Thoughts>.*?</Thoughts>',
+            r'<Thought>.*?</Thought>',
+            
+            # Special separator style tags
+            r'<\|begin_of_thought\|>.*?<\|end_of_thought\|>',
+            r'<\|thinking\|>.*?<\|/thinking\|>',
+            r'<\|thought\|>.*?<\|/thought\|>',
+            r'<\|thoughts\|>.*?<\|/thoughts\|>',
+            
+            # Bracket style
+            r'\[thinking\].*?\[/thinking\]',
+            r'\[thought\].*?\[/thought\]',
+            r'\[thoughts\].*?\[/thoughts\]',
+            r'\[THINKING\].*?\[/THINKING\]',
+            r'\[THOUGHT\].*?\[/THOUGHT\]',
+            r'\[THOUGHTS\].*?\[/THOUGHTS\]',
+            
+            # Multiline variations
+            r'<thinking>\n?.*?\n?</thinking>',
+            r'<thought>\n?.*?\n?</thought>',
+            r'<Think>\n?.*?\n?</Think>',
+            r'<Thought>\n?.*?\n?</Thought>',
+            
+            # Comment-style tags that some models use
+            r'<!-- thinking -->.*?<!-- end thinking -->',
+            r'/\* thinking \*/.*?/\* end thinking \*/',
+            
+            # Allow for whitespace around tags
+            r'<\s*thinking\s*>.*?<\s*/\s*thinking\s*>',
+            r'<\s*thought\s*>.*?<\s*/\s*thought\s*>',
+        ]
+        
+        # Check if any response contains thinking tokens
+        needs_postprocessing = False
+        for choice in answers:
+            for turn_response in choice["turns"]:
+                for pattern in patterns:
+                    if re.search(pattern, turn_response, re.DOTALL):
+                        needs_postprocessing = True
+                        self.logger.info(f"Found thinking tokens in response, will apply postprocessing")
+                        break
+                if needs_postprocessing:
+                    break
+            if needs_postprocessing:
+                break
+                
+        # If we're in debug mode, force postprocessing
+        if self.debug and not needs_postprocessing:
+            needs_postprocessing = True
+            self.logger.info("Debug mode: Forcing postprocessing even without thinking tokens")
+            
+        # If we need postprocessing, initialize the postprocessing model
+        if needs_postprocessing:
+            # First move the main model to CPU to free up GPU memory
+            self.logger.info(f"Moving main model to CPU to free up GPU memory")
+            model = move_model_to_device(model, device="cpu")
+            
+            # Initialize the postprocessing model
+            self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")
+            postproc_model = initialize_model(
+                model="hf",
+                model_args=f"pretrained={self.reasoning_postproc_model},dtype=bfloat16",
+                device="cuda"
+            )
+            
+            # Process each response
+            self.logger.info("Postprocessing responses with thinking tokens")
+            
+            for choice_idx, choice in enumerate(answers):
+                for turn_idx, turn_response in enumerate(choice["turns"]):
+                    processed_response = turn_response
+                    
+                    # Look for thinking tokens using each pattern
+                    for pattern in patterns:
+                        matches = list(re.finditer(pattern, processed_response, re.DOTALL))
+                        
+                        # Process from end to beginning to avoid messing up indices
+                        for match in reversed(matches):
+                            start, end = match.span()
+                            thinking_block = processed_response[start:end]
+                            
+                            # Skip very short thinking blocks (likely false positives)
+                            if len(thinking_block) < 20:
+                                continue
+                                
+                            # Prepare prompt for the postprocessing model
+                            prompt_messages = [
+                                {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
+                                {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n\nHere's the thinking block:\n\n{thinking_block}"}
+                            ]
+                            
+                            # Apply chat template (if model supports it)
+                            prompt = None
+                            if hasattr(postproc_model, "apply_chat_template") and callable(postproc_model.apply_chat_template):
+                                prompt = postproc_model.apply_chat_template(prompt_messages)
+                            else:
+                                # Basic fallback if model doesn't support chat templates
+                                prompt = prompt_messages[-1]["content"]
+                            
+                            # Create instance
+                            instance = Instance(
+                                "generate_until",
+                                prompt_messages,
+                                (
+                                    prompt,
+                                    {
+                                        "max_gen_toks": 1024,
+                                        "do_sample": False,
+                                        "temperature": 0.0,
+                                    },
+                                ),
+                                0,
+                            )
+                            
+                            # Generate cleaned response
+                            cleaned_thinking = self.compute(postproc_model, [instance])[0]
+                            
+                            # Replace the thinking block with cleaned output
+                            processed_response = processed_response[:start] + cleaned_thinking + processed_response[end:]
+                    
+                    # Update the answer with the processed response
+                    choice["turns"][turn_idx] = processed_response
+            
+            # Save the processed answers to a different file for comparison
+            if model.rank == 0:
+                answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
+                with open(answer_file, "w") as f:
+                    for q_idx, question in enumerate(questions):
+                        if q_idx < len(answers):
+                            ans_json = {
+                                "question_id": question["question_id"],
+                                "answer_id": shortuuid.uuid(),
+                                "model_id": model_id,
+                                "choices": [answers[q_idx]],
+                                "tstamp": time.time(),
+                            }
+                            f.write(json.dumps(ans_json) + "\n")
+            
+            # Clean up the postprocessing model to free up GPU memory
+            self.logger.info("Cleaning up postprocessing model")
+            del postproc_model
+            import gc
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except (ImportError, AttributeError):
+                pass
+            
+            # Move the main model back to GPU
+            self.logger.info("Moving main model back to GPU")
+            model = move_model_to_device(model, device="cuda")
+            
+        # Return only the model_id for compatibility with evaluate_responses
+        return {"model_id": model_id}
 
     def evaluate_responses(self, results: Dict[str, Any]) -> Dict[str, float]:
         """
         Evaluate model responses using GPT-4 judge.
 
         Args:
-            results: Dictionary containing model identifier
+            results: Dictionary containing model identifier and optionally answers and questions
 
         Returns:
             Dictionary containing evaluation metrics, or None for non-primary ranks
@@ -216,13 +412,36 @@ class MTBenchBenchmark(BaseBenchmark):
         if results is None:
             return None
 
+        # Check if we should use the processed answer file
+        model_id = results["model_id"]
+        processed_answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
+        use_processed_answers = processed_answer_file.exists()
+        
+        if use_processed_answers:
+            self.logger.info(f"Found processed answers file at {processed_answer_file}, will use for evaluation")
+
         # Load data
         questions = load_questions(self.question_file, None, None)
         if self.debug:
             questions = questions[:2]
             self.logger.info(f"Debug mode: using 2 examples")
 
+        # Load answers, using processed answers if available
         model_answers = load_model_answers(self.answer_dir)
+        if use_processed_answers:
+            # Add processed answers to the model_answers dictionary
+            processed_answers = {}
+            with open(processed_answer_file, "r") as f:
+                for line in f:
+                    answer = json.loads(line)
+                    question_id = answer["question_id"]
+                    processed_answers[question_id] = answer
+            
+            # Replace the original model answers with processed answers
+            for question_id, answer in processed_answers.items():
+                if question_id in model_answers[model_id]:
+                    model_answers[model_id][question_id] = answer
+            
         ref_answers = load_model_answers(self.ref_answer_dir)
         judge_prompts = load_judge_prompts(self.config.judge_file)
 
