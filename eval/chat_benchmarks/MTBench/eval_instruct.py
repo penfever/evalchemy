@@ -227,7 +227,7 @@ class MTBenchBenchmark(BaseBenchmark):
         original_model_type = getattr(model.model, '_model_type', 'hf')
         
         # Get model arguments - ensure it's a string
-        model_args = getattr(model, 'model_args', '')
+        model_args = getattr(model.model, 'model_args', '')
         if model_args is None:
             model_args = ''
         elif not isinstance(model_args, str):
@@ -539,7 +539,7 @@ class MTBenchBenchmark(BaseBenchmark):
             if original_model_type.lower() == 'hf' and ('pretrained=' not in model_args_str):
                 self.logger.warning(f"Missing pretrained parameter in model_args: '{model_args_str}'")
                 # Use a fallback model since we don't know what the original was
-                model_args_str = "pretrained=gpt2,dtype=float32"
+                model_args_str = "pretrained=Qwen/Qwen2.5-7B-Instruct,dtype=float32"
                 self.logger.info(f"Using fallback model_args: {model_args_str}")
             
             try:
