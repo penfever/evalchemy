@@ -136,13 +136,54 @@ def load_model_answers(answer_dir: str):
                 line_data = json.loads(line)
                 answer[line_data["question_id"]] = line_data
                 
-                # Check if this answer has thinking tokens as a sanity check
+                # Check if this answer has thinking tokens and fix if needed
+                thinking_patterns = [
+                    "<think>", "<thinking>", "<thoughts>", "<thought>",
+                    "<Think>", "<Thinking>", "<Thoughts>", "<Thought>",
+                    "[thinking]", "[thought]", "[thoughts]", 
+                    "<|thinking|>", "<|thought|>", "<|thoughts|>"
+                ]
+                
                 if "choices" in line_data:
-                    for choice in line_data["choices"]:
+                    needs_fixing = False
+                    
+                    for choice_idx, choice in enumerate(line_data["choices"]):
                         if "turns" in choice:
-                            for turn in choice["turns"]:
-                                if isinstance(turn, str) and "<think>" in turn:
+                            for turn_idx, turn in enumerate(choice["turns"]):
+                                if isinstance(turn, str) and any(pattern in turn for pattern in thinking_patterns):
                                     logger.warning(f"Found thinking tokens in model {model_name}, question {line_data['question_id']}")
+                                    needs_fixing = True
+                                    
+                                    # Force regex cleaning on any content that still has thinking tokens
+                                    try:
+                                        from eval.utils.reasoning_postproc import clean_thinking_tokens
+                                        cleaned_turn = clean_thinking_tokens(turn)
+                                        line_data["choices"][choice_idx]["turns"][turn_idx] = cleaned_turn
+                                        logger.info(f"Applied emergency cleanup to model {model_name}, question {line_data['question_id']}")
+                                    except Exception as cleanup_e:
+                                        logger.error(f"Error applying emergency cleanup: {str(cleanup_e)}")
+                    
+                    # If we had to fix it, update the file
+                    if needs_fixing:
+                        try:
+                            # Find this line in the file and update it
+                            temp_file = filename + ".temp"
+                            with open(filename, 'r') as fin, open(temp_file, 'w') as fout:
+                                for original_line in fin:
+                                    orig_data = json.loads(original_line)
+                                    if orig_data.get("question_id") == line_data["question_id"]:
+                                        # Replace this line with our fixed version
+                                        fout.write(json.dumps(line_data) + "\n")
+                                    else:
+                                        # Keep original line
+                                        fout.write(original_line)
+                                        
+                            # Replace original file with temp file
+                            import os, shutil
+                            shutil.move(temp_file, filename)
+                            logger.info(f"Updated file {filename} with emergency cleaned data")
+                        except Exception as update_e:
+                            logger.error(f"Error updating file after emergency cleanup: {str(update_e)}")
                     
         model_answers[model_name] = answer
 

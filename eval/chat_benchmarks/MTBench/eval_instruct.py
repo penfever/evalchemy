@@ -241,6 +241,35 @@ class MTBenchBenchmark(BaseBenchmark):
         # Handle None result from non-primary ranks
         if results is None:
             return None
+            
+        # Aggressively free GPU memory before post-processing
+        try:
+            # First try to import torch and clear CUDA cache
+            import torch
+            if torch.cuda.is_available():
+                # Display initial memory stats
+                free_mem = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+                total_mem = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+                self.logger.info(f"Before VRAM cleanup: {free_mem:.2f} GB free out of {total_mem:.2f} GB total")
+                
+                # Empty CUDA cache first
+                torch.cuda.empty_cache()
+            
+            # Force system-wide garbage collection
+            import gc
+            self.logger.info("Running garbage collection to free memory")
+            # Run collection multiple times to catch objects with circular references
+            gc.collect(0)  # Collect generation 0 objects
+            gc.collect(1)  # Collect generation 1 objects
+            gc.collect(2)  # Collect generation 2 objects
+            
+            # Display memory stats after cleanup
+            if torch.cuda.is_available():
+                free_mem = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+                total_mem = torch.cuda.mem_get_info()[1] / (1024 ** 3)
+                self.logger.info(f"After VRAM cleanup: {free_mem:.2f} GB free out of {total_mem:.2f} GB total")
+        except Exception as e:
+            self.logger.warning(f"Error during VRAM cleanup: {str(e)}")
 
         # Check if we need to apply reasoning post-processing
         # This is important because the framework might be calling this method directly
@@ -365,6 +394,28 @@ class MTBenchBenchmark(BaseBenchmark):
                                 import shutil
                                 shutil.copy(answer_file, backup_file)
                                 self.logger.info(f"Backed up original answers to {backup_file}")
+                            
+                            # Perform final verification to ensure all thinking tokens are removed
+                            # Define all thinking token patterns to check for
+                            from eval.utils.reasoning_postproc import clean_thinking_tokens
+                            all_thinking_patterns = [
+                                "<think>", "<thinking>", "<thoughts>", "<thought>",
+                                "<Think>", "<Thinking>", "<Thoughts>", "<Thought>",
+                                "[thinking]", "[thought]", "[thoughts]", 
+                                "<|thinking|>", "<|thought|>", "<|thoughts|>"
+                            ]
+                            
+                            # Apply final cleanup to any responses that still have thinking tokens
+                            for ans_idx, ans in enumerate(processed_answers):
+                                if "choices" in ans:
+                                    for choice_idx, choice in enumerate(ans["choices"]):
+                                        if "turns" in choice:
+                                            for turn_idx, turn_content in enumerate(choice["turns"]):
+                                                if isinstance(turn_content, str) and any(pattern in turn_content for pattern in all_thinking_patterns):
+                                                    self.logger.warning(f"Found thinking tokens after processing in answer {ans_idx}, choice {choice_idx}, turn {turn_idx}")
+                                                    # Apply one final round of regex cleaning
+                                                    final_cleaned = clean_thinking_tokens(turn_content)
+                                                    processed_answers[ans_idx]["choices"][choice_idx]["turns"][turn_idx] = final_cleaned
                             
                             # Write to file and flush immediately within the same with block
                             with open(answer_file, "w") as f:

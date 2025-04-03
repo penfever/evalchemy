@@ -325,10 +325,25 @@ def process_with_model(model: LM, text: str, logger: logging.Logger) -> str:
             total_mem = torch.cuda.mem_get_info()[1] / (1024 ** 3)
             logger.info(f"Available GPU memory: {free_mem:.2f} GB free out of {total_mem:.2f} GB total")
             
-            # If we have very little free VRAM, skip model-based cleaning
+            # If we have very little free VRAM, try one more round of cleanup
             if free_mem < 1.0:
-                logger.warning(f"Only {free_mem:.2f} GB free VRAM available - using regex-only cleaning")
-                return cleaned_text
+                logger.warning(f"Only {free_mem:.2f} GB free VRAM available - attempting additional cleanup")
+                
+                # Force more aggressive garbage collection
+                import gc
+                for _ in range(3):  # Run multiple cycles
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                
+                # Check if the cleanup helped
+                free_mem = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+                logger.info(f"After aggressive cleanup: {free_mem:.2f} GB free VRAM")
+                
+                # If still not enough memory, use regex-only cleaning
+                if free_mem < 1.0:
+                    logger.warning(f"Still only {free_mem:.2f} GB free VRAM - falling back to regex-only cleaning")
+                    # Make sure we apply a very thorough regex cleaning as fallback
+                    return clean_thinking_tokens(text)
     except Exception as e:
         logger.warning(f"Unable to check GPU memory: {str(e)}")
     
