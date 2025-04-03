@@ -23,6 +23,79 @@ def cleanup_model(model):
     """
     print("Cleanup model type: ", type(model).__name__)
     
+    # Special handling for vllm.entrypoints.llm.LLM objects
+    if str(type(model.model).__module__).startswith('vllm') and str(type(model.model).__name__) == 'LLM':
+        print("Found VLLM entrypoints.llm.LLM object - using specialized cleanup")
+        vllm_obj = model.model
+        
+        # 1. Reset any in-progress generation
+        try:
+            if hasattr(vllm_obj, '_add_request') and hasattr(vllm_obj, 'request_counter'):
+                print("Resetting VLLM request counter and clearing requests")
+                vllm_obj.request_counter = 0
+        except Exception as e:
+            print(f"Error resetting VLLM requests: {e}")
+            
+        # 2. Try to stop profiling if it's running
+        try:
+            if hasattr(vllm_obj, 'stop_profile') and callable(vllm_obj.stop_profile):
+                print("Stopping VLLM profile")
+                vllm_obj.stop_profile()
+        except Exception as e:
+            print(f"Error stopping profile: {e}")
+            
+        # 3. Try to reset prefix cache
+        try:
+            if hasattr(vllm_obj, 'reset_prefix_cache') and callable(vllm_obj.reset_prefix_cache):
+                print("Resetting VLLM prefix cache")
+                vllm_obj.reset_prefix_cache()
+        except Exception as e:
+            print(f"Error resetting prefix cache: {e}")
+        
+        # 4. Try to access and shutdown the engine
+        try:
+            if hasattr(vllm_obj, 'llm_engine') and vllm_obj.llm_engine is not None:
+                engine = vllm_obj.llm_engine
+                print(f"Found direct LLM engine: {type(engine).__name__}")
+                
+                # Try to put the engine to sleep or shut it down
+                if hasattr(vllm_obj, 'sleep') and callable(vllm_obj.sleep):
+                    print("Putting VLLM engine to sleep")
+                    vllm_obj.sleep()
+                
+                # Try to access and stop the scheduler
+                if hasattr(engine, 'scheduler') and engine.scheduler is not None:
+                    print("Stopping LLM engine scheduler")
+                    engine.scheduler.stop()
+                
+                # Try to access worker processes
+                if hasattr(engine, 'workers'):
+                    print(f"Found {len(engine.workers)} workers to terminate")
+                    for worker in engine.workers:
+                        if worker is not None and hasattr(worker, 'process') and worker.process is not None:
+                            print(f"Terminating worker process {worker.process.pid}")
+                            worker.process.terminate()
+                            worker.process.join(timeout=1.0)
+                            
+                # Try to clean up CUDA workers
+                if hasattr(engine, '_driver'):
+                    print("Cleaning up VLLM driver")
+                    if hasattr(engine._driver, '_cuda_workers'):
+                        print("Terminating CUDA workers")
+                        for worker in engine._driver._cuda_workers:
+                            if worker is not None:
+                                try:
+                                    worker.terminate()
+                                except Exception as e:
+                                    print(f"Error terminating CUDA worker: {e}")
+                    
+                    # Directly terminate the driver
+                    if hasattr(engine._driver, 'terminate') and callable(engine._driver.terminate):
+                        print("Terminating driver")
+                        engine._driver.terminate()
+        except Exception as e:
+            print(f"Error in VLLM engine cleanup: {e}")
+    
     # Define a recursive function to find and shutdown engines/clients
     def find_and_shutdown_recursive(obj, depth=0, max_depth=3, visited=None):
         if visited is None:
@@ -42,13 +115,13 @@ def cleanup_model(model):
             print(f"Examining model object: {type(obj).__name__}")
         
         # Check for vLLM engine
-        for engine_attr in ['llm_engine', 'engine', 'client', 'driver']:
+        for engine_attr in ['llm_engine', 'engine', 'client', 'driver', '_driver']:
             if hasattr(obj, engine_attr):
                 engine = getattr(obj, engine_attr)
                 print(f"Found {engine_attr} at depth {depth}: {type(engine).__name__}")
                 
                 # Try to shutdown the engine
-                for shutdown_method in ['shutdown', 'stop', 'terminate', 'close']:
+                for shutdown_method in ['shutdown', 'stop', 'terminate', 'close', 'cleanup']:
                     if hasattr(engine, shutdown_method) and callable(getattr(engine, shutdown_method)):
                         try:
                             print(f"Calling {shutdown_method}() on {type(engine).__name__}")
@@ -67,23 +140,33 @@ def cleanup_model(model):
                 print(f"Error stopping scheduler: {e}")
         
         # Clean up worker processes
-        if hasattr(obj, 'workers'):
-            try:
-                for worker in obj.workers:
-                    if worker is not None and hasattr(worker, 'process') and worker.process is not None:
-                        print("Terminating worker process")
-                        worker.process.terminate()
-                        worker.process.join(timeout=2.0)  # Add timeout to prevent hanging
-            except Exception as e:
-                print(f"Error terminating workers: {e}")
+        for worker_attr in ['workers', '_workers', '_cuda_workers']:
+            if hasattr(obj, worker_attr):
+                try:
+                    workers = getattr(obj, worker_attr)
+                    print(f"Found {len(workers)} {worker_attr} to terminate")
+                    for worker in workers:
+                        if worker is not None:
+                            # Check if it's a process
+                            if hasattr(worker, 'process') and worker.process is not None:
+                                print(f"Terminating worker process {worker.process.pid if hasattr(worker.process, 'pid') else ''}")
+                                worker.process.terminate()
+                                worker.process.join(timeout=1.0)  # Add timeout to prevent hanging
+                            # Or if it's directly a process-like object
+                            elif hasattr(worker, 'terminate') and callable(worker.terminate):
+                                print("Directly terminating worker")
+                                worker.terminate()
+                except Exception as e:
+                    print(f"Error terminating {worker_attr}: {e}")
                 
         # Try common model attributes that might contain engines
-        for attr_name in ['model', 'llm', 'backend', 'client']:
+        for attr_name in ['model', 'llm', 'backend', 'client', '_model']:
             if hasattr(obj, attr_name):
                 try:
                     attr = getattr(obj, attr_name)
-                    print(f"Recursively examining '{attr_name}': {type(attr).__name__}")
-                    find_and_shutdown_recursive(attr, depth+1, max_depth, visited)
+                    if attr is not None:  # Skip None attributes
+                        print(f"Recursively examining '{attr_name}': {type(attr).__name__}")
+                        find_and_shutdown_recursive(attr, depth+1, max_depth, visited)
                 except Exception as e:
                     print(f"Error examining {attr_name}: {e}")
                     
@@ -94,25 +177,13 @@ def cleanup_model(model):
         print(f"Error in recursive model cleanup: {e}")
     
     # Try direct cleanup methods on the model itself
-    for cleanup_method in ['close', 'cleanup', 'shutdown', 'terminate']:
+    for cleanup_method in ['close', 'cleanup', 'shutdown', 'terminate', 'sleep']:
         if hasattr(model, cleanup_method) and callable(getattr(model, cleanup_method)):
             try:
                 print(f"Calling {cleanup_method}() method on model")
                 getattr(model, cleanup_method)()
             except Exception as e:
                 print(f"Error calling {cleanup_method}(): {e}")
-    
-    # Additional VLLM-specific cleanup
-    try:
-        model_type = type(model).__name__
-        if 'VLLM' in model_type and hasattr(model, 'model'):
-            print("Additional VLLM cleanup")
-            if hasattr(model.model, 'driver'):
-                if hasattr(model.model.driver, 'terminate'):
-                    print("Terminating VLLM driver")
-                    model.model.driver.terminate()
-    except Exception as e:
-        print(f"Error in VLLM-specific cleanup: {e}")
                 
     # Delete the model object itself
     try:
@@ -122,14 +193,17 @@ def cleanup_model(model):
     
     # Force Python garbage collection - multiple times
     import gc
-    for _ in range(3):
+    for _ in range(5):  # More aggressive GC
         gc.collect()
     
     # Clear CUDA cache - multiple times
     try:
         import torch
         if torch.cuda.is_available():
-            for _ in range(3):
+            # First try to dump all unused CUDA memory
+            torch.cuda._sleep(1)  # Encourage L2 cache to flush
+            
+            for _ in range(5):  # More aggressive cache clearing
                 torch.cuda.empty_cache()
                 
             # Try to reset peak memory stats
@@ -142,13 +216,14 @@ def cleanup_model(model):
         
             # For distributed setups, you might need to destroy process group
             if torch.distributed.is_initialized():
+                print("Destroying distributed process group")
                 torch.distributed.destroy_process_group()
     except Exception as e:
         print(f"Error clearing CUDA memory: {e}")
         
     # Sleep a bit to allow OS to reclaim memory
     import time
-    time.sleep(1)
+    time.sleep(2)  # Longer sleep to allow more time for cleanup
 
 def print_colored(text, color=Fore.WHITE, style=Style.NORMAL, end="\n"):
     """Print text with color and style."""
