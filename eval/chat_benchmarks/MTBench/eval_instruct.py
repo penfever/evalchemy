@@ -18,6 +18,7 @@ from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
 from eval.task import BaseBenchmark
 from eval.eval import move_model_to_device, initialize_model
+from eval.constants import THINK_PATTERNS as patterns
 from fastchat.llm_judge.common import (
     load_questions,
     load_model_answers,
@@ -220,9 +221,18 @@ class MTBenchBenchmark(BaseBenchmark):
         Returns:
             Dictionary containing model identifier and processed answers, or None for non-primary ranks
         """
-        # Store original model type (registry name, e.g., 'hf' or 'vllm')
+        # Store original model initialization parameters
+        # Get model type (registry name, e.g., 'hf' or 'vllm')
         original_model_type = getattr(model, '_model_type', 'hf')
         
+        # Get model arguments
+        model_args = getattr(model, 'model_args', '')
+        
+        # Extract model config to reuse initialization strategy
+        model_batch_size = getattr(model, 'batch_size', None)
+        if not model_batch_size:
+            model_batch_size = getattr(model, 'batch_size_per_gpu', None)
+            
         # Call the regular generate_responses method
         result = self.generate_responses(model)
         
@@ -234,47 +244,6 @@ class MTBenchBenchmark(BaseBenchmark):
         model_id = result["model_id"]
         answers = result["answers"]
         questions = result["questions"]
-        
-        # Define patterns to detect thinking tokens
-        patterns = [
-            # HTML-style tags
-            r'<think>.*?</think>',
-            r'<thinking>.*?</thinking>',
-            r'<thoughts>.*?</thoughts>',
-            r'<thought>.*?</thought>',
-            r'<Think>.*?</Think>',
-            r'<Thinking>.*?</Thinking>',
-            r'<Thoughts>.*?</Thoughts>',
-            r'<Thought>.*?</Thought>',
-            
-            # Special separator style tags
-            r'<\|begin_of_thought\|>.*?<\|end_of_thought\|>',
-            r'<\|thinking\|>.*?<\|/thinking\|>',
-            r'<\|thought\|>.*?<\|/thought\|>',
-            r'<\|thoughts\|>.*?<\|/thoughts\|>',
-            
-            # Bracket style
-            r'\[thinking\].*?\[/thinking\]',
-            r'\[thought\].*?\[/thought\]',
-            r'\[thoughts\].*?\[/thoughts\]',
-            r'\[THINKING\].*?\[/THINKING\]',
-            r'\[THOUGHT\].*?\[/THOUGHT\]',
-            r'\[THOUGHTS\].*?\[/THOUGHTS\]',
-            
-            # Multiline variations
-            r'<thinking>\n?.*?\n?</thinking>',
-            r'<thought>\n?.*?\n?</thought>',
-            r'<Think>\n?.*?\n?</Think>',
-            r'<Thought>\n?.*?\n?</Thought>',
-            
-            # Comment-style tags that some models use
-            r'<!-- thinking -->.*?<!-- end thinking -->',
-            r'/\* thinking \*/.*?/\* end thinking \*/',
-            
-            # Allow for whitespace around tags
-            r'<\s*thinking\s*>.*?<\s*/\s*thinking\s*>',
-            r'<\s*thought\s*>.*?<\s*/\s*thought\s*>',
-        ]
         
         # Check if any response contains thinking tokens
         needs_postprocessing = False
@@ -299,7 +268,6 @@ class MTBenchBenchmark(BaseBenchmark):
         if needs_postprocessing:
             # First move the main model to CPU to free up GPU memory
             self.logger.info(f"Moving main model to CPU to free up GPU memory")
-            model_args = getattr(model, 'model_args', '')
             
             # Clean up the model manually rather than trying to move it
             self.logger.info(f"Cleaning up main model ({original_model_type})")
@@ -313,11 +281,35 @@ class MTBenchBenchmark(BaseBenchmark):
             except (ImportError, AttributeError):
                 pass
             
-            # Initialize the postprocessing model
+            # Initialize the postprocessing model using the same strategy as the original model
             self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")
+            
+            # Reuse the same initialization strategy and parameters from the original model
+            postproc_args = f"pretrained={self.reasoning_postproc_model}"
+            
+            # Extract dtype from original model args if present
+            import re
+            dtype_match = re.search(r'dtype=([^,]+)', model_args)
+            if dtype_match:
+                postproc_args += f",dtype={dtype_match.group(1)}"
+            else:
+                # Default to bfloat16 if not specified
+                postproc_args += ",dtype=bfloat16"
+                
+            # Add batch size if available
+            if model_batch_size:
+                postproc_args += f",batch_size={model_batch_size}"
+                
+            # Add other important parameters from original model (except pretrained)
+            for param in ["tp_size", "parallelize", "max_memory_per_gpu"]:
+                param_match = re.search(f'{param}=([^,]+)', model_args)
+                if param_match:
+                    postproc_args += f",{param}={param_match.group(1)}"
+            
+            self.logger.info(f"Initializing postprocessing model with args: {postproc_args}")
             postproc_model = initialize_model(
-                model="hf",
-                model_args=f"pretrained={self.reasoning_postproc_model},dtype=bfloat16",
+                model=original_model_type,  # Use same model type (hf, vllm, etc.)
+                model_args=postproc_args,
                 device="cuda"
             )
             
@@ -406,12 +398,16 @@ class MTBenchBenchmark(BaseBenchmark):
             except (ImportError, AttributeError):
                 pass
             
-            # Recreate the main model
-            self.logger.info(f"Recreating main model of type {original_model_type}")
+            # Recreate the main model with original parameters
+            self.logger.info(f"Recreating main model of type {original_model_type} with original parameters")
+            self.logger.info(f"Model args: {model_args}")
+            
+            # Initialize with original parameters
             model = initialize_model(
                 model=original_model_type,
                 model_args=model_args,
-                device="cuda"
+                device="cuda",
+                batch_size=model_batch_size
             )
             
         # Return only the model_id for compatibility with evaluate_responses
