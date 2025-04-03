@@ -19,40 +19,136 @@ colorama.init()
 def cleanup_model(model):
     """
     Clean up the vLLM or hf model to free up resources.
+    Handles deep nested model structures and common cleanup patterns.
     """
-    if hasattr(model, 'llm_engine') and model.llm_engine is not None:
-        if hasattr(model.llm_engine, 'scheduler') and model.llm_engine.scheduler is not None:
-            model.llm_engine.scheduler.stop()
+    print("Cleanup model type: ", type(model).__name__)
+    
+    # Define a recursive function to find and shutdown engines/clients
+    def find_and_shutdown_recursive(obj, depth=0, max_depth=3, visited=None):
+        if visited is None:
+            visited = set()
+        
+        # Avoid infinite recursion and duplicates
+        if obj is None:
+            return
+            
+        obj_id = id(obj)
+        if obj_id in visited or depth > max_depth:
+            return
+        visited.add(obj_id)
+        
+        # Log what we're examining for debugging
+        if depth == 0:
+            print(f"Examining model object: {type(obj).__name__}")
+        
+        # Check for vLLM engine
+        for engine_attr in ['llm_engine', 'engine', 'client', 'driver']:
+            if hasattr(obj, engine_attr):
+                engine = getattr(obj, engine_attr)
+                print(f"Found {engine_attr} at depth {depth}: {type(engine).__name__}")
+                
+                # Try to shutdown the engine
+                for shutdown_method in ['shutdown', 'stop', 'terminate', 'close']:
+                    if hasattr(engine, shutdown_method) and callable(getattr(engine, shutdown_method)):
+                        try:
+                            print(f"Calling {shutdown_method}() on {type(engine).__name__}")
+                            getattr(engine, shutdown_method)()
+                            break  # If one method succeeds, don't try others
+                        except Exception as e:
+                            print(f"Error calling {shutdown_method}(): {e}")
+        
+        # Check for scheduler
+        if hasattr(obj, 'scheduler') and obj.scheduler is not None:
+            try:
+                print("Found scheduler, stopping it")
+                if hasattr(obj.scheduler, 'stop') and callable(obj.scheduler.stop):
+                    obj.scheduler.stop()
+            except Exception as e:
+                print(f"Error stopping scheduler: {e}")
         
         # Clean up worker processes
-        if hasattr(model.llm_engine, 'workers'):
-            for worker in model.llm_engine.workers:
-                if worker is not None and worker.process is not None:
-                    worker.process.terminate()
-                    worker.process.join()
+        if hasattr(obj, 'workers'):
+            try:
+                for worker in obj.workers:
+                    if worker is not None and hasattr(worker, 'process') and worker.process is not None:
+                        print("Terminating worker process")
+                        worker.process.terminate()
+                        worker.process.join(timeout=2.0)  # Add timeout to prevent hanging
+            except Exception as e:
+                print(f"Error terminating workers: {e}")
+                
+        # Try common model attributes that might contain engines
+        for attr_name in ['model', 'llm', 'backend', 'client']:
+            if hasattr(obj, attr_name):
+                try:
+                    attr = getattr(obj, attr_name)
+                    print(f"Recursively examining '{attr_name}': {type(attr).__name__}")
+                    find_and_shutdown_recursive(attr, depth+1, max_depth, visited)
+                except Exception as e:
+                    print(f"Error examining {attr_name}: {e}")
+                    
+    # Start recursive shutdown
+    try:
+        find_and_shutdown_recursive(model)
+    except Exception as e:
+        print(f"Error in recursive model cleanup: {e}")
     
+    # Try direct cleanup methods on the model itself
+    for cleanup_method in ['close', 'cleanup', 'shutdown', 'terminate']:
+        if hasattr(model, cleanup_method) and callable(getattr(model, cleanup_method)):
+            try:
+                print(f"Calling {cleanup_method}() method on model")
+                getattr(model, cleanup_method)()
+            except Exception as e:
+                print(f"Error calling {cleanup_method}(): {e}")
+    
+    # Additional VLLM-specific cleanup
+    try:
+        model_type = type(model).__name__
+        if 'VLLM' in model_type and hasattr(model, 'model'):
+            print("Additional VLLM cleanup")
+            if hasattr(model.model, 'driver'):
+                if hasattr(model.model.driver, 'terminate'):
+                    print("Terminating VLLM driver")
+                    model.model.driver.terminate()
+    except Exception as e:
+        print(f"Error in VLLM-specific cleanup: {e}")
+                
     # Delete the model object itself
-    del model
+    try:
+        del model
+    except Exception as e:
+        print(f"Error deleting model: {e}")
     
-    # Force Python garbage collection
+    # Force Python garbage collection - multiple times
     import gc
-    gc.collect()
+    for _ in range(3):
+        gc.collect()
     
-    # Clear CUDA cache
-    import torch
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()              
-        # Try to reset peak memory stats
-        if hasattr(torch.cuda, 'reset_peak_memory_stats'):
-            torch.cuda.reset_peak_memory_stats()
-            
-        # Try a more aggressive approach
-        if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
-            torch.cuda.reset_accumulated_memory_stats()
-    
-        # For distributed setups, you might need to destroy process group
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
+    # Clear CUDA cache - multiple times
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for _ in range(3):
+                torch.cuda.empty_cache()
+                
+            # Try to reset peak memory stats
+            if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                torch.cuda.reset_peak_memory_stats()
+                
+            # Try a more aggressive approach
+            if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
+                torch.cuda.reset_accumulated_memory_stats()
+        
+            # For distributed setups, you might need to destroy process group
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+    except Exception as e:
+        print(f"Error clearing CUDA memory: {e}")
+        
+    # Sleep a bit to allow OS to reclaim memory
+    import time
+    time.sleep(1)
 
 def print_colored(text, color=Fore.WHITE, style=Style.NORMAL, end="\n"):
     """Print text with color and style."""

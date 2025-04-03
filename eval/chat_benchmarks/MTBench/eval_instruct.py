@@ -224,7 +224,7 @@ class MTBenchBenchmark(BaseBenchmark):
         """
         # Store original model initialization parameters
         # Get model type (registry name, e.g., 'hf' or 'vllm')
-        original_model_type = getattr(model, '_model_type', 'hf')
+        original_model_type = getattr(model.model, '_model_type', 'hf')
         
         # Get model arguments - ensure it's a string
         model_args = getattr(model, 'model_args', '')
@@ -275,8 +275,8 @@ class MTBenchBenchmark(BaseBenchmark):
             
             # Clean up the model manually rather than trying to move it
             self.logger.info(f"Cleaning up main model ({original_model_type})")
-            print("Model methods: ", dir(model))
-            print("Model type: ", type(model))
+            print("Model methods: ", dir(model.model))
+            print("Model type: ", type(model.model))
             
             cleanup_model(model)
             
