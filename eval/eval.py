@@ -167,6 +167,8 @@ def evaluate(
     if benchmark_tasks:
         # Sequential generation since it's GPU-bound
         generate_methods = task_manager.get_list_generate_responses(benchmark_tasks)
+        print("GENERATE METHODS")
+        print(generate_methods)
         generation_results = []
         valid_tasks = []  # Keep track of valid tasks
         for method, task, batch_size in zip(generate_methods, benchmark_tasks, benchmark_batch_sizes):
