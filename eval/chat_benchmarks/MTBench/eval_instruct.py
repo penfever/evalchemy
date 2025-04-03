@@ -422,8 +422,8 @@ class MTBenchBenchmark(BaseBenchmark):
                         
                         # Prepare prompt for the postprocessing model
                         prompt_messages = [
-                            {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
-                            {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n\nHere's the thinking block:\n\n{thinking_block}"}
+                            {"role": "system", "content": "You are a helpful AI assistant that distills thinking processes. Your task is to remove special tokens and condense the text while preserving any important reasoning chains or conclusions."},
+                            {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Your job is to summarize:\n1. Remove all thinking tokens and markers\n2. Condense the content\n3. Eliminate all repetitive, uncertain, and rambling text\n4. Preserve key insights and final conclusions without altering them at all\n\nHere's the thinking block:\n\n{thinking_block}"}
                         ]
                         
                         # Apply chat template (if model supports it)
