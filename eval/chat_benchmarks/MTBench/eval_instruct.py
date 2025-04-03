@@ -250,6 +250,7 @@ class MTBenchBenchmark(BaseBenchmark):
         for choice in answers:
             for turn_response in choice["turns"]:
                 for pattern in patterns:
+                    import re 
                     if re.search(pattern, turn_response, re.DOTALL):
                         needs_postprocessing = True
                         self.logger.info(f"Found thinking tokens in response, will apply postprocessing")
