@@ -225,8 +225,12 @@ class MTBenchBenchmark(BaseBenchmark):
         # Get model type (registry name, e.g., 'hf' or 'vllm')
         original_model_type = getattr(model, '_model_type', 'hf')
         
-        # Get model arguments
+        # Get model arguments - ensure it's a string
         model_args = getattr(model, 'model_args', '')
+        if model_args is None:
+            model_args = ''
+        elif not isinstance(model_args, str):
+            model_args = str(model_args)
         
         # Extract model config to reuse initialization strategy
         model_batch_size = getattr(model, 'batch_size', None)
@@ -288,13 +292,22 @@ class MTBenchBenchmark(BaseBenchmark):
             # Reuse the same initialization strategy and parameters from the original model
             postproc_args = f"pretrained={self.reasoning_postproc_model}"
             
-            # Extract dtype from original model args if present
+            # Extract parameters from model args safely
             import re
-            dtype_match = re.search(r'dtype=([^,]+)', model_args)
-            if dtype_match:
-                postproc_args += f",dtype={dtype_match.group(1)}"
-            else:
-                # Default to bfloat16 if not specified
+            
+            # Ensure model_args is a string for regex operations
+            model_args_str = str(model_args) if model_args is not None else ""
+            
+            # Extract dtype
+            try:
+                dtype_match = re.search(r'dtype=([^,]+)', model_args_str)
+                if dtype_match:
+                    postproc_args += f",dtype={dtype_match.group(1)}"
+                else:
+                    # Default to bfloat16 if not specified
+                    postproc_args += ",dtype=bfloat16"
+            except Exception as e:
+                self.logger.warning(f"Error extracting dtype: {e}")
                 postproc_args += ",dtype=bfloat16"
                 
             # Add batch size if available
@@ -303,9 +316,12 @@ class MTBenchBenchmark(BaseBenchmark):
                 
             # Add other important parameters from original model (except pretrained)
             for param in ["tp_size", "parallelize", "max_memory_per_gpu"]:
-                param_match = re.search(f'{param}=([^,]+)', model_args)
-                if param_match:
-                    postproc_args += f",{param}={param_match.group(1)}"
+                try:
+                    param_match = re.search(f'{param}=([^,]+)', model_args_str)
+                    if param_match:
+                        postproc_args += f",{param}={param_match.group(1)}"
+                except Exception as e:
+                    self.logger.warning(f"Error extracting {param}: {e}")
             
             self.logger.info(f"Initializing postprocessing model with args: {postproc_args}")
             postproc_model = initialize_model(
@@ -403,10 +419,11 @@ class MTBenchBenchmark(BaseBenchmark):
             self.logger.info(f"Recreating main model of type {original_model_type} with original parameters")
             self.logger.info(f"Model args: {model_args}")
             
-            # Initialize with original parameters
+            # Initialize with original parameters - ensure model_args is a string
+            model_args_str = str(model_args) if model_args is not None else ""
             model = initialize_model(
                 model=original_model_type,
-                model_args=model_args,
+                model_args=model_args_str,
                 device="cuda",
                 batch_size=model_batch_size
             )
