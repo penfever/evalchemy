@@ -166,9 +166,15 @@ def evaluate(
     # Run benchmark evaluations - sequential generation, parallel evaluation
     if benchmark_tasks:
         # Sequential generation since it's GPU-bound
-        generate_methods = task_manager.get_list_generate_responses(benchmark_tasks)
-        print("GENERATE METHODS")
-        print(generate_methods)
+        # Use postprocessing methods if reasoning_postproc is enabled
+        use_postprocessing = getattr(args, 'reasoning_postproc', False)
+        if use_postprocessing:
+            eval_logger.info("Using response postprocessing for model outputs")
+            
+        generate_methods = task_manager.get_list_generate_responses(
+            benchmark_tasks, 
+            use_postprocessing=use_postprocessing
+        )
         generation_results = []
         valid_tasks = []  # Keep track of valid tasks
         for method, task, batch_size in zip(generate_methods, benchmark_tasks, benchmark_batch_sizes):
@@ -489,6 +495,72 @@ def initialize_model(
 
     lm.model_identifier = sanitize_model_name(f"model_{model}_model_args_{model_args}")
     return lm
+
+
+def move_model_to_device(
+    model: Union[str, LM],
+    device: str = "cpu",
+    model_args: Optional[str] = None,
+    batch_size: Optional[int] = None
+) -> LM:
+    """
+    Clean up an existing model and reinitialize it on the specified device.
+    
+    This function deletes the model, performs garbage collection,
+    clears CUDA cache, and then reinitializes the model on the requested device.
+
+    Args:
+        model (Union[str, LM]):
+            Either a string identifier for the model to load from registry,
+            or an already instantiated LM object.
+        device (str, optional):
+            Device to load the model on (e.g., 'cuda', 'cpu', 'cuda:0'). 
+            Defaults to "cpu".
+        model_args (Optional[str], optional):
+            Additional arguments for model initialization as a string.
+            Only used if model is provided as a string. Defaults to None.
+        batch_size (Optional[int], optional):
+            Batch size for the model. Defaults to None.
+
+    Returns:
+        LM:
+            New language model instance initialized on the specified device.
+    """
+    # Delete the old model references
+    if isinstance(model, LM):
+        model_name = model.model_identifier if hasattr(model, "model_identifier") else "model"
+        model_type = type(model).__name__ if not isinstance(model, str) else model
+        utils.eval_logger.info(f"Cleaning up {model_name} ({model_type}) and reinitializing on {device}")
+        
+        # Make sure we have the string configuration for reinitialization
+        if model_args is None and hasattr(model, "model_args"):
+            model_args = model.model_args
+        
+        # Store model type for reinitialization
+        model_type = model.__class__.__name__
+        
+        # Delete the model reference
+        del model
+    
+    # Force garbage collection
+    import gc
+    gc.collect()
+    
+    # Clear CUDA cache if torch is available
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except (ImportError, AttributeError):
+        pass
+
+    # Reinitialize the model on the specified device
+    return initialize_model(
+        model=model_type if 'model_type' in locals() else model,
+        model_args=model_args,
+        device=device,
+        batch_size=batch_size
+    )
 
 
 def add_results_metadata(results: Dict, batch_sizes_list: List[int], args: argparse.Namespace, lm: LM) -> None:

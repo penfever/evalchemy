@@ -127,6 +127,23 @@ class BaseBenchmark(ABC):
     def generate_responses(self, model: LM) -> Dict[str, Any]:
         """Generate responses from the model for the benchmark tasks."""
         pass
+    
+    def generate_and_postprocess_responses(self, model: LM) -> Dict[str, Any]:
+        """
+        Generate responses and apply post-processing if reasoning_postproc is enabled.
+        
+        By default, this simply calls generate_responses. Subclasses can override
+        this method to implement custom post-processing logic.
+        
+        Args:
+            model: The language model to use for generation
+            
+        Returns:
+            Dictionary containing the generated responses
+        """
+        # Default implementation just calls generate_responses
+        print("we called generate and postproc")
+        return self.generate_responses(model)
 
     @abstractmethod
     def evaluate_responses(self, results: Dict[str, Any]) -> Dict[str, float]:
@@ -136,7 +153,13 @@ class BaseBenchmark(ABC):
     def run_benchmark(self, model: LM) -> Dict[str, float]:
         """Run the complete benchmark evaluation pipeline."""
         print(f"Running {self.__class__.__name__} benchmark")
-        generation_results = self.generate_responses(model)
+        
+        # Use generate_and_postprocess_responses if reasoning_postproc is enabled
+        if self.reasoning_postproc:
+            generation_results = self.generate_and_postprocess_responses(model)
+        else:
+            generation_results = self.generate_responses(model)
+            
         evaluation_results = self.evaluate_responses(generation_results)
         return evaluation_results
 
@@ -280,12 +303,25 @@ class TaskManager:
         except Exception as e:
             self.logger.error(f"Error registering benchmark {name}: {str(e)}")
 
-    def get_list_generate_responses(self, task_list: List[str]) -> List[Callable]:
-        """Get list of generate_responses methods for given tasks."""
+    def get_list_generate_responses(self, task_list: List[str], use_postprocessing: bool = False) -> List[Callable]:
+        """
+        Get list of response generation methods for given tasks.
+        
+        Args:
+            task_list: List of task names
+            use_postprocessing: If True, return generate_and_postprocess_responses methods
+                                instead of generate_responses methods
+                                
+        Returns:
+            List of callable methods for generating responses
+        """
         methods = []
         for task in task_list:
             if task in self.benchmark_instances:
-                methods.append(self.benchmark_instances[task].generate_responses)
+                if use_postprocessing:
+                    methods.append(self.benchmark_instances[task].generate_and_postprocess_responses)
+                else:
+                    methods.append(self.benchmark_instances[task].generate_responses)
             else:
                 self.logger.warning(f"Task not found: {task}")
         return methods
