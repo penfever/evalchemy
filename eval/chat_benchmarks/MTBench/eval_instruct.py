@@ -220,6 +220,9 @@ class MTBenchBenchmark(BaseBenchmark):
         Returns:
             Dictionary containing model identifier and processed answers, or None for non-primary ranks
         """
+        # Store original model type (registry name, e.g., 'hf' or 'vllm')
+        original_model_type = getattr(model, '_model_type', 'hf')
+        
         # Call the regular generate_responses method
         result = self.generate_responses(model)
         
@@ -296,7 +299,19 @@ class MTBenchBenchmark(BaseBenchmark):
         if needs_postprocessing:
             # First move the main model to CPU to free up GPU memory
             self.logger.info(f"Moving main model to CPU to free up GPU memory")
-            model = move_model_to_device(model, device="cpu")
+            model_args = getattr(model, 'model_args', '')
+            
+            # Clean up the model manually rather than trying to move it
+            self.logger.info(f"Cleaning up main model ({original_model_type})")
+            del model
+            import gc
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except (ImportError, AttributeError):
+                pass
             
             # Initialize the postprocessing model
             self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")
@@ -391,9 +406,13 @@ class MTBenchBenchmark(BaseBenchmark):
             except (ImportError, AttributeError):
                 pass
             
-            # Move the main model back to GPU
-            self.logger.info("Moving main model back to GPU")
-            model = move_model_to_device(model, device="cuda")
+            # Recreate the main model
+            self.logger.info(f"Recreating main model of type {original_model_type}")
+            model = initialize_model(
+                model=original_model_type,
+                model_args=model_args,
+                device="cuda"
+            )
             
         # Return only the model_id for compatibility with evaluate_responses
         return {"model_id": model_id}
