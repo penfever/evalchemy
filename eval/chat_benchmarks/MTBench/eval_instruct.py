@@ -463,7 +463,7 @@ class MTBenchBenchmark(BaseBenchmark):
                     
                     # Update the answer with the processed response
                     choice["turns"][turn_idx] = processed_response
-                    print(f"Processed response for question {q_idx}, turn {turn_idx}: {processed_response}")
+                    print(f"Processed response for question {choice_idx}, turn {turn_idx}: {processed_response}")
         
             answer_file = self.answer_dir / f"{model_id}_processed.jsonl"
             import time
