@@ -276,15 +276,51 @@ class MTBenchBenchmark(BaseBenchmark):
             
             # Clean up the model manually rather than trying to move it
             self.logger.info(f"Cleaning up main model ({original_model_type})")
+            
+            # For VLLM models, try to shutdown the engine if possible
+            if original_model_type.lower() == 'vllm' and hasattr(model, 'engine') and hasattr(model.engine, 'shutdown'):
+                try:
+                    self.logger.info("Detected VLLM model, shutting down engine")
+                    model.engine.shutdown()
+                except Exception as e:
+                    self.logger.warning(f"Failed to shutdown VLLM engine: {e}")
+                    
+            # Try to call any available cleanup methods
+            for cleanup_method in ['close', 'cleanup', 'shutdown', 'terminate']:
+                if hasattr(model, cleanup_method) and callable(getattr(model, cleanup_method)):
+                    try:
+                        self.logger.info(f"Calling {cleanup_method}() method")
+                        getattr(model, cleanup_method)()
+                    except Exception as e:
+                        self.logger.warning(f"Error calling {cleanup_method}(): {e}")
+            
+            # Delete the model
             del model
+            
+            # More aggressive memory cleanup
             import gc
             gc.collect()
+            
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except (ImportError, AttributeError):
-                pass
+                    # Empty cache multiple times
+                    for _ in range(3):
+                        torch.cuda.empty_cache()
+                    
+                    # Try to reset peak memory stats
+                    if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                        torch.cuda.reset_peak_memory_stats()
+                        
+                    # Try a more aggressive approach
+                    if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
+                        torch.cuda.reset_accumulated_memory_stats()
+            except (ImportError, AttributeError) as e:
+                self.logger.warning(f"Error clearing CUDA memory: {e}")
+                
+            # Try to sleep a bit to allow OS to reclaim memory
+            import time
+            time.sleep(1)
             
             # Initialize the postprocessing model using the same strategy as the original model
             self.logger.info(f"Initializing postprocessing model: {self.reasoning_postproc_model}")
@@ -405,15 +441,51 @@ class MTBenchBenchmark(BaseBenchmark):
             
             # Clean up the postprocessing model to free up GPU memory
             self.logger.info("Cleaning up postprocessing model")
+            
+            # For VLLM models, try to shutdown the engine if possible
+            if hasattr(postproc_model, 'engine') and hasattr(postproc_model.engine, 'shutdown'):
+                try:
+                    self.logger.info("Detected VLLM postprocessing model, shutting down engine")
+                    postproc_model.engine.shutdown()
+                except Exception as e:
+                    self.logger.warning(f"Failed to shutdown VLLM engine: {e}")
+                    
+            # Try to call any available cleanup methods
+            for cleanup_method in ['close', 'cleanup', 'shutdown', 'terminate']:
+                if hasattr(postproc_model, cleanup_method) and callable(getattr(postproc_model, cleanup_method)):
+                    try:
+                        self.logger.info(f"Calling {cleanup_method}() method on postprocessing model")
+                        getattr(postproc_model, cleanup_method)()
+                    except Exception as e:
+                        self.logger.warning(f"Error calling {cleanup_method}(): {e}")
+            
+            # Delete the postprocessing model
             del postproc_model
+            
+            # More aggressive memory cleanup
             import gc
             gc.collect()
+            
             try:
                 import torch
                 if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except (ImportError, AttributeError):
-                pass
+                    # Empty cache multiple times
+                    for _ in range(3):
+                        torch.cuda.empty_cache()
+                    
+                    # Try to reset peak memory stats
+                    if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                        torch.cuda.reset_peak_memory_stats()
+                        
+                    # Try a more aggressive approach
+                    if hasattr(torch.cuda, 'reset_accumulated_memory_stats'):
+                        torch.cuda.reset_accumulated_memory_stats()
+            except (ImportError, AttributeError) as e:
+                self.logger.warning(f"Error clearing CUDA memory: {e}")
+                
+            # Try to sleep a bit to allow OS to reclaim memory
+            import time
+            time.sleep(1)
             
             # Recreate the main model with original parameters
             self.logger.info(f"Recreating main model of type {original_model_type} with original parameters")
