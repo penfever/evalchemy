@@ -19,9 +19,24 @@ from lm_eval.api.model import LM
 class BaseBenchmark(ABC):
     """Abstract base class for implementing LLM evaluation benchmarks."""
 
-    def __init__(self, logger: Optional[logging.Logger] = None, system_instruction: Optional[str] = None):
+    def __init__(
+        self, 
+        logger: Optional[logging.Logger] = None, 
+        system_instruction: Optional[str] = None,
+        reasoning_postproc: bool = False,
+        reasoning_postproc_model: str = "Qwen/Qwen2.5-7B-Instruct",
+    ):
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.system_instruction = system_instruction
+        self.reasoning_postproc = reasoning_postproc
+        self.reasoning_postproc_model = reasoning_postproc_model 
+        self.postproc_model = None
+        
+        # We no longer initialize the post-processing model here
+        # It will be loaded lazily when needed to avoid using GPU memory
+        if self.reasoning_postproc:
+            self.logger.info(f"Reasoning post-processing enabled with model: {self.reasoning_postproc_model}")
+            self.logger.info(f"Post-processing model will be loaded on demand to save GPU memory")
 
     def _normalize_model_args(self, model: LM, instances: List[Instance]) -> List[Instance]:
         for instance in instances:
@@ -133,7 +148,12 @@ class TaskManager:
     """
 
     def __init__(
-        self, benchmarks_dir: str = "chat_benchmarks", task_list: Optional[List[str]] = None, **benchmark_kwargs
+        self, 
+        benchmarks_dir: str = "chat_benchmarks", 
+        task_list: Optional[List[str]] = None, 
+        reasoning_postproc: bool = False,
+        reasoning_postproc_model: str = "Qwen/Qwen2.5-7B-Instruct",
+        **benchmark_kwargs
     ):
         self.logger = logging.getLogger("TaskManager")
         self.tasks: Dict[str, Any] = {}
@@ -141,6 +161,13 @@ class TaskManager:
         self.benchmark_kwargs = benchmark_kwargs
         self.task_list = task_list
         self.list_of_tasks_that_require_annotator_model = []
+        
+        # Add reasoning post-processing parameters to benchmark kwargs
+        self.benchmark_kwargs["reasoning_postproc"] = reasoning_postproc
+        self.benchmark_kwargs["reasoning_postproc_model"] = reasoning_postproc_model
+        
+        if reasoning_postproc:
+            self.logger.info(f"Reasoning post-processing enabled with model: {reasoning_postproc_model}")
 
         # Load benchmarks from directory
         self._load_benchmarks(benchmarks_dir)
