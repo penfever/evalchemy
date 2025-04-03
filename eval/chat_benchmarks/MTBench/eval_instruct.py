@@ -389,11 +389,22 @@ class MTBenchBenchmark(BaseBenchmark):
                     self.logger.warning(f"Error extracting {param}: {e}")
             
             self.logger.info(f"Initializing postprocessing model with args: {postproc_args}")
-            postproc_model = initialize_model(
-                model=original_model_type,  # Use same model type (hf, vllm, etc.)
-                model_args=postproc_args,
-                device="cuda"
-            )
+            try:
+                # Always use 'hf' for the postprocessing model, regardless of original model type
+                postproc_model = initialize_model(
+                    model="hf",  # Always use HF for postprocessing
+                    model_args=postproc_args,
+                    device="cuda"
+                )
+            except Exception as e:
+                self.logger.error(f"Error initializing postprocessing model: {e}")
+                self.logger.info("Trying with simplified parameters...")
+                # Fallback with minimal parameters
+                postproc_model = initialize_model(
+                    model="hf",
+                    model_args=f"pretrained={self.reasoning_postproc_model},dtype=float32",
+                    device="cuda"
+                )
             
             # Process each response
             self.logger.info("Postprocessing responses with thinking tokens")
