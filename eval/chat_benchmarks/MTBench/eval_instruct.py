@@ -20,6 +20,7 @@ from eval.task import BaseBenchmark
 from eval.eval import move_model_to_device, initialize_model
 from eval.constants import THINK_PATTERNS as patterns
 from eval.distributed.launch import cleanup_model
+from eval.utils.reasoning_postproc import extract_thinking_blocks, process_thinking_blocks
 from fastchat.llm_judge.common import (
     load_questions,
     load_model_answers,
@@ -414,54 +415,72 @@ class MTBenchBenchmark(BaseBenchmark):
             
             for choice_idx, choice in enumerate(answers):
                 for turn_idx, turn_response in enumerate(choice["turns"]):
-                    did_process = False
-                    processed_response = turn_response
-                    # Look for thinking tokens using each pattern
-                    for pattern in patterns:
-                        matches = list(re.finditer(pattern, processed_response, re.DOTALL))
-                        if len(matches) > 0:
-                            did_process = True                            
-                        # Process from end to beginning to avoid messing up indices
-                        for match in reversed(matches):
-                            start, end = match.span()
-                            thinking_block = processed_response[start:end]
-
-                            print(f"Thinking block contents: {thinking_block}")
+                    # Define a processing function to clean up thinking blocks
+                    def clean_thinking_block(thinking_block: str) -> str:
+                        """Process a thinking block using the postprocessing model."""
+                        self.logger.info(f"Processing thinking block: {thinking_block[:100]}...")
+                        
+                        # Prepare prompt for the postprocessing model
+                        prompt_messages = [
+                            {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
+                            {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n\nHere's the thinking block:\n\n{thinking_block}"}
+                        ]
+                        
+                        # Apply chat template (if model supports it)
+                        prompt = None
+                        if hasattr(postproc_model, "apply_chat_template") and callable(postproc_model.apply_chat_template):
+                            prompt = postproc_model.apply_chat_template(prompt_messages)
+                        else:
+                            # Basic fallback if model doesn't support chat templates
+                            prompt = prompt_messages[-1]["content"]
+                        
+                        # Create instance
+                        instance = Instance(
+                            "generate_until",
+                            prompt_messages,
+                            (
+                                prompt,
+                                {
+                                    "max_gen_toks": 1024,
+                                    "do_sample": False,
+                                    "temperature": 0.0,
+                                },
+                            ),
+                            0,
+                        )
+                        
+                        output = self.compute(postproc_model, [instance])
+                        print(f"Output: {output}")
+                        # Generate cleaned response
+                        cleaned = output[0]
+                        self.logger.info(f"Cleaned thinking block: {cleaned[:100]}...")
+                        return cleaned
+                    
+                    # Extract thinking blocks using our new utility
+                    spans = extract_thinking_blocks(turn_response, patterns)
+                    
+                    # Check if we found any blocks
+                    if spans:
+                        did_process = True
+                        self.logger.info(f"Found {len(spans)} thinking blocks in response {choice_idx}, turn {turn_idx}")
+                        
+                        # Process the response
+                        processed_response = turn_response
+                        
+                        # Process spans from end to beginning to avoid affecting positions
+                        for start, end in sorted(spans, key=lambda x: x[0], reverse=True):
+                            # Extract the thinking block
+                            thinking_block = turn_response[start:end]
                                 
-                            # Prepare prompt for the postprocessing model
-                            prompt_messages = [
-                                {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
-                                {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n\nHere's the thinking block:\n\n{thinking_block}"}
-                            ]
+                            # Process the thinking block
+                            cleaned_thinking = clean_thinking_block(thinking_block)
                             
-                            # Apply chat template (if model supports it)
-                            prompt = None
-                            if hasattr(postproc_model, "apply_chat_template") and callable(postproc_model.apply_chat_template):
-                                prompt = postproc_model.apply_chat_template(prompt_messages)
-                            else:
-                                # Basic fallback if model doesn't support chat templates
-                                prompt = prompt_messages[-1]["content"]
-                            
-                            # Create instance
-                            instance = Instance(
-                                "generate_until",
-                                prompt_messages,
-                                (
-                                    prompt,
-                                    {
-                                        "max_gen_toks": 1024,
-                                        "do_sample": False,
-                                        "temperature": 0.0,
-                                    },
-                                ),
-                                0,
-                            )
-                            
-                            # Generate cleaned response
-                            cleaned_thinking = self.compute(postproc_model, [instance])[0]
-                            
-                            # Replace the thinking block with cleaned output
+                            # Replace in the result
                             processed_response = processed_response[:start] + cleaned_thinking + processed_response[end:]
+                    else:
+                        # No thinking blocks found
+                        did_process = False
+                        processed_response = turn_response
                     
                     old_resp = choice["turns"][turn_idx]
                     # Update the answer with the processed response
@@ -476,7 +495,7 @@ class MTBenchBenchmark(BaseBenchmark):
                             # Calculate how much the response changed (percentage of characters)
                             orig_len = sum(len(t) for t in answers[choice_idx]["turns"])
                             proc_len = sum(len(t) for t in new_responses[choice_idx]["turns"])
-                            change_pct = abs(proc_len - orig_len) / orig_len * 100 if orig_len > 0 else 0
+                            change_pct = (proc_len - orig_len) / orig_len * 100 if orig_len > 0 else 0
                             self.logger.info(f"Response length changed by {change_pct:.2f}% (from {orig_len} to {proc_len} chars)")
                 new_responses[choice_idx] = choice
 
