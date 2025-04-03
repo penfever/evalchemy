@@ -14,6 +14,8 @@ def extract_thinking_blocks(text: str, patterns: List[str]) -> List[Tuple[int, i
     1. Nested tags (multiple opens before any close)
     2. Unclosed tags (open tags that continue until the end of the string)
     3. Multiple open/close pairs
+    4. Tags with excessive whitespace
+    5. Malformed or broken tags
 
     Args:
         text: The text to analyze
@@ -24,22 +26,60 @@ def extract_thinking_blocks(text: str, patterns: List[str]) -> List[Tuple[int, i
     """
     spans = []
     
-    # First pass: standard regex matching for simple tag pairs
+    # First pass: standard regex matching with DOTALL flag to handle newlines
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.DOTALL):
             spans.append(match.span())
     
-    # Second pass: process more complex patterns
+    # Second pass: look for isolated opening tags with no closing tag
+    # Define basic open tag patterns with flexible whitespace
+    open_tag_patterns = [
+        r'<\s*think(?:\s*|\s+[^>]*)?>', 
+        r'<\s*thinking(?:\s*|\s+[^>]*)?>', 
+        r'<\s*thoughts(?:\s*|\s+[^>]*)?>', 
+        r'<\s*thought(?:\s*|\s+[^>]*)?>', 
+        r'<\s*Think(?:\s*|\s+[^>]*)?>', 
+        r'<\s*Thinking(?:\s*|\s+[^>]*)?>', 
+        r'<\s*Thoughts(?:\s*|\s+[^>]*)?>', 
+        r'<\s*Thought(?:\s*|\s+[^>]*)?>', 
+        r'\[\s*thinking(?:\s*|\s+[^\]]*)?]', 
+        r'\[\s*thought(?:\s*|\s+[^\]]*)?]', 
+        r'\[\s*thoughts(?:\s*|\s+[^\]]*)?]', 
+        r'\[\s*THINKING(?:\s*|\s+[^\]]*)?]', 
+        r'\[\s*THOUGHT(?:\s*|\s+[^\]]*)?]', 
+        r'\[\s*THOUGHTS(?:\s*|\s+[^\]]*)?]',
+        r'<\|thinking\|>', 
+        r'<\|thought\|>', 
+        r'<\|thoughts\|>',
+        r'<\|begin_of_thought\|>'
+    ]
+    
+    # Check for opening tags without corresponding closing tags
+    for open_pattern in open_tag_patterns:
+        open_matches = list(re.finditer(open_pattern, text, re.DOTALL))
+        for open_match in open_matches:
+            # Check if this opening tag already has a span (from the first pass)
+            is_covered = False
+            for start, end in spans:
+                if open_match.start() >= start and open_match.start() < end:
+                    is_covered = True
+                    break
+            
+            # If not already covered, consider it an unclosed tag and add a span to the end
+            if not is_covered:
+                spans.append((open_match.start(), len(text)))
+    
+    # Third pass: process more complex patterns with nested tags and explicit tag pairs
     # For each tag type, extract nested or unclosed blocks
     tag_pairs = [
-        ("<think>", "</think>"),
-        ("<thinking>", "</thinking>"),
-        ("<thoughts>", "</thoughts>"),
-        ("<thought>", "</thought>"),
-        ("<Think>", "</Think>"),
-        ("<Thinking>", "</Thinking>"),
-        ("<Thoughts>", "</Thoughts>"),
-        ("<Thought>", "</Thought>"),
+        ("<think", "</think>"),
+        ("<thinking", "</thinking>"),
+        ("<thoughts", "</thoughts>"),
+        ("<thought", "</thought>"),
+        ("<Think", "</Think>"),
+        ("<Thinking", "</Thinking>"),
+        ("<Thoughts", "</Thoughts>"),
+        ("<Thought", "</Thought>"),
         ("<|begin_of_thought|>", "<|end_of_thought|>"),
         ("<|thinking|>", "<|/thinking|>"),
         ("<|thought|>", "<|/thought|>"),
@@ -50,71 +90,43 @@ def extract_thinking_blocks(text: str, patterns: List[str]) -> List[Tuple[int, i
         ("[THINKING]", "[/THINKING]"),
         ("[THOUGHT]", "[/THOUGHT]"),
         ("[THOUGHTS]", "[/THOUGHTS]"),
-        ("<!-- thinking -->", "<!-- end thinking -->"),
-        ("/* thinking */", "/* end thinking */")
+        ("<!-- thinking", "<!-- end thinking"),
+        ("/* thinking", "/* end thinking")
     ]
     
-    # Add whitespace variations
-    ws_pairs = [
-        (r"<\s*thinking\s*>", r"<\s*/\s*thinking\s*>"),
-        (r"<\s*thought\s*>", r"<\s*/\s*thought\s*>"),
-    ]
-    
-    # Process all tag pairs
-    for open_tag, close_tag in tag_pairs + ws_pairs:
-        # Regex escape the tags if they're not already regexes (starting with r"\s")
-        if not open_tag.startswith(r"\s") and not open_tag.startswith(r"<\s"):
-            open_tag_pattern = re.escape(open_tag)
-            close_tag_pattern = re.escape(close_tag)
-        else:
-            # Already regex patterns
-            open_tag_pattern = open_tag
-            close_tag_pattern = close_tag
-            
-        # Find all instances of open and close tags
-        open_matches = list(re.finditer(open_tag_pattern, text))
-        close_matches = list(re.finditer(close_tag_pattern, text))
+    # Process all tag pairs with stack-based approach
+    for open_tag_base, close_tag_base in tag_pairs:
+        # Find all instances of open and close tags with flexible whitespace
+        # This handles cases like "< thinking >" with lots of whitespace
+        open_tag_pattern = f"{re.escape(open_tag_base)}\\s*[^><\\[\\]]*?>|{re.escape(open_tag_base)}\\s*[^><\\[\\]]*?\\]"
+        close_tag_pattern = re.escape(close_tag_base)
+        
+        open_matches = list(re.finditer(open_tag_pattern, text, re.DOTALL))
+        close_matches = list(re.finditer(close_tag_pattern, text, re.DOTALL))
         
         if not open_matches:
             continue
-            
-        # Case 1: Unclosed tag at the end
-        if len(open_matches) > len(close_matches):
-            # Find the last unmatched open tag
-            last_open = None
-            for i, open_match in enumerate(reversed(open_matches)):
-                # Check if this open tag has a corresponding close tag
-                has_close = False
-                for close_match in close_matches:
-                    if close_match.start() > open_match.end():
-                        has_close = True
-                        break
-                if not has_close:
-                    last_open = open_match
-                    break
-                    
-            if last_open:
-                # Add span from last open tag to end of string
-                spans.append((last_open.start(), len(text)))
         
-        # Case 2: Nested tags
+        # Sort by position
+        open_positions = [(match.start(), "open", match) for match in open_matches]
+        close_positions = [(match.start(), "close", match) for match in close_matches]
+        all_positions = sorted(open_positions + close_positions)
+        
+        # Process nested tags with a stack
         stack = []
-        for i, char in enumerate(text):
-            # Check for open tag at this position
-            for open_match in open_matches:
-                if open_match.start() == i:
-                    stack.append(open_match.end())
-                    break
-                    
-            # Check for close tag at this position
-            for close_match in close_matches:
-                if close_match.start() == i and stack:
-                    # Found a close tag with a corresponding open tag on the stack
-                    open_end = stack.pop()
-                    # If stack is empty, we've closed a complete group
-                    if not stack:
-                        spans.append((open_match.start(), close_match.end()))
-                    break
+        for pos, tag_type, match in all_positions:
+            if tag_type == "open":
+                stack.append(match)
+            elif tag_type == "close" and stack:
+                open_match = stack.pop()
+                # If stack is empty, we've closed a complete group
+                if not stack:
+                    spans.append((open_match.start(), match.end()))
+        
+        # Process leftover unclosed tags
+        while stack:
+            open_match = stack.pop()
+            spans.append((open_match.start(), len(text)))
     
     # Merge overlapping spans
     if spans:
@@ -131,7 +143,14 @@ def extract_thinking_blocks(text: str, patterns: List[str]) -> List[Tuple[int, i
                 # Add as separate span
                 merged.append(current)
                 
-        return merged
+        # Final check: ensure we don't have tiny spans (likely false positives)
+        final_spans = []
+        for start, end in merged:
+            # If the span is reasonable in size (not just a tag name)
+            if end - start >= 10:  # Minimum size to avoid false positives
+                final_spans.append((start, end))
+                
+        return final_spans
     
     return spans
 
