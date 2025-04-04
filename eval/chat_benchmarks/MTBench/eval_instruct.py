@@ -413,18 +413,52 @@ class MTBenchBenchmark(BaseBenchmark):
             new_responses = deepcopy(answers)
             did_process = False
             
+            # Gather the conversation structure from questions to provide context for multi-turn responses
+            conversation_contexts = []
+            for q_idx, question in enumerate(questions):
+                context = []
+                for t_idx in range(len(question["turns"])):
+                    if q_idx < len(answers) and t_idx < len(question["turns"]):
+                        context.append({"role": "user", "content": question["turns"][t_idx]})
+                        if t_idx < len(answers[q_idx]["turns"]):
+                            context.append({"role": "assistant", "content": answers[q_idx]["turns"][t_idx]})
+                conversation_contexts.append(context)
+                
             for choice_idx, choice in enumerate(answers):
                 for turn_idx, turn_response in enumerate(choice["turns"]):
                     # Define a processing function to clean up thinking blocks
                     def clean_thinking_block(thinking_block: str) -> str:
                         """Process a thinking block using the postprocessing model."""
-                        self.logger.info(f"Processing thinking block: {thinking_block[:100]}...")
+                        self.logger.info(f"Processing thinking block for turn {turn_idx+1}: {thinking_block[:100]}...")
                         
-                        # Prepare prompt for the postprocessing model
-                        prompt_messages = [
-                            {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
-                            {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n\nHere's the thinking block:\n\n{thinking_block}"}
-                        ]
+                        # For turn 2+, include context from previous turns
+                        if turn_idx > 0 and choice_idx < len(conversation_contexts):
+                            # Get the conversation context up to the current turn
+                            prior_context = conversation_contexts[choice_idx][:turn_idx*2]  # Each turn has user + assistant message
+                            
+                            context_description = "\n\nPrevious conversation:\n"
+                            
+                            # Format the context messages
+                            for msg in prior_context:
+                                if msg["role"] == "user":
+                                    context_description += f"User: {msg['content']}\n"
+                                else:
+                                    context_description += f"Assistant: {msg['content']}\n"
+                            
+                            # Add current user query
+                            latest_user_message = questions[choice_idx]['turns'][turn_idx] if choice_idx < len(questions) and turn_idx < len(questions[choice_idx]['turns']) else "Unknown"
+                            context_description += f"\nLatest user message: {latest_user_message}\n"
+                            
+                            prompt_messages = [
+                                {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
+                                {"role": "user", "content": f"This is a thinking block from an AI assistant's response to the latest message in a conversation. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n5. Ensuring the response addresses the latest user question within the context of the conversation\n{context_description}\nHere's the thinking block:\n\n{thinking_block}"}
+                            ]
+                        else:
+                            # For turn 1, no prior context needed
+                            prompt_messages = [
+                                {"role": "system", "content": "You are a helpful AI assistant that helps clean up thinking processes in text. Remove all special tokens and clean up the text to make it concise, coherent, and well-structured."},
+                                {"role": "user", "content": f"This is a thinking block from an AI assistant's response. Please clean it up by:\n1. Removing all thinking tokens and markers\n2. Removing repetitive, uncertain, or rambling text\n3. Making it concise and clear\n4. Preserving the core insights\n\nHere's the thinking block:\n\n{thinking_block}"}
+                            ]
                         
                         # Apply chat template (if model supports it)
                         prompt = None
