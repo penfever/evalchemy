@@ -90,10 +90,10 @@ class MTBenchBenchmark(BaseBenchmark):
         if getattr(self, "config", None) is None:
             self.config = MTBenchConfig(
                 judge_model=annotator_model,
-                max_new_token=max_tokens if max_tokens is not None else 1024,
             )
         else:
             self.config = config
+        self.config.max_new_token = max_tokens if max_tokens is not None else 1024
         self.debug = debug
 
         # Setup paths
@@ -116,7 +116,6 @@ class MTBenchBenchmark(BaseBenchmark):
         max_turns = max(len(q["turns"]) for q in questions)
         answer_file = self.answer_dir / f"{model_id}.jsonl"
 
-        self.config.max_new_token = self.max_new_token
         # Process each turn
         for turn_num in range(max_turns):
             self.logger.info(f"Processing Turn {turn_num + 1}")
