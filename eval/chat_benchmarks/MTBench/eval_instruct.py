@@ -87,13 +87,13 @@ class MTBenchBenchmark(BaseBenchmark):
         """
         super().__init__(logger=logger, system_instruction=system_instruction)
         self.base_path = Path(base_path)
-        self.config.max_new_token = max_tokens if max_tokens is not None else 1024
-        if annotator_model == "auto":
-            annotator_model = "gpt-4"
-        if config:
-            print(f"Warning: Overwriting config.judge_model = {annotator_model} ")
-            config.judge_model = annotator_model
-        self.config = config or MTBenchConfig(judge_model=annotator_model)
+        if getattr(self, "config", None) is None:
+            self.config = MTBenchConfig(
+                judge_model=annotator_model,
+                max_new_token=max_tokens if max_tokens is not None else 1024,
+            )
+        else:
+            self.config = config
         self.debug = debug
 
         # Setup paths
