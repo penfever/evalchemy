@@ -71,7 +71,7 @@ class MTBenchBenchmark(BaseBenchmark):
         config: Optional[MTBenchConfig] = None,
         debug: bool = False,
         annotator_model: str = "gpt-4o-mini-2024-07-18",
-        max_tokens: Optional[int] = 1024,
+        max_tokens: int = 1024,
         logger: Optional[logging.Logger] = None,
         system_instruction: Optional[str] = None,
     ):

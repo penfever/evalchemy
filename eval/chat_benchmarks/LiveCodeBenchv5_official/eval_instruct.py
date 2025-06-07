@@ -12,13 +12,14 @@ from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
 
 from eval.task import BaseBenchmark
+from huggingface_hub import hf_hub_download
 
 from .livecodebench_utils import lcb_run, map_to_example, post_process_code, translate_private_test_cases
 
 HF_HUB_CACHE = os.environ.get("HF_HUB_CACHE")
 if not HF_HUB_CACHE:
     print(
-        "WARNING: HF_HUB_CACHE environment variable is not set, using default cache directory ~/.cache/huggingface/hub for LiveCodeBench benchmark"
+        "WARNING: HF_HUB_CACHE environment variable is not set, using default cache directory ~/.cache/huggingface/hub for LiveCodeBenchv5 benchmark"
     )
 
 
@@ -31,18 +32,20 @@ def has_code(response):
 
 # Calculate mean and standard error for all metrics
 def calc_stats(values):
-    arr = np.asarray(values, dtype=float)
-    mask = ~np.isnan(arr)
-    if mask.sum() == 0:  # all NaNs → undefined; return 0,0
-        return 0.0, 0.0
-    mean = arr[mask].mean()
-    stderr = np.std(arr[mask], ddof=1) / np.sqrt(mask.sum())
+    mean = np.mean(values)
+    stderr = np.std(values, ddof=1) / np.sqrt(len(values))
     return mean, stderr
 
 
-class LiveCodeBenchBenchmark(BaseBenchmark):
+
+def filter_by_contest_date(example):
+    target_months = ["2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01"]
+    return example['contest_date'][:7] in target_months
+
+
+class LiveCodeBenchV5OfficialBenchmark(BaseBenchmark):
     """
-    LiveCodeBench Benchmark for evaluating the math reasoning of LLMs.
+    LiveCodeBench v5 - v2 Benchmark for evaluating the math reasoning of LLMs.
 
     Follows the evaluation logic of hendrycks_math answer extraction.
     """
@@ -56,7 +59,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         system_instruction: Optional[str] = None,
     ):
         """
-        Initialize LiveCodeBench benchmark.
+        Initialize LiveCodeBenchV5 benchmark.
 
         Args:
             debug: If set, only evaluate on 2 examples
@@ -68,7 +71,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         self.debug = debug
         self.max_new_tokens = max_tokens
         self.seed = seed
-        self.n_repeat = 6
+        self.n_repeat = 3
 
     def generate_responses(self, model: LM) -> Dict[str, Any]:
         """
@@ -124,7 +127,7 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
                 all_instances.append(instance)
 
             # Generate model responses
-            self.logger.info("Generating responses for LiveCodeBench...")
+            self.logger.info("Generating responses for LiveCodeBenchV5...")
             outputs = self.compute(model, all_instances)
             all_outputs.append(outputs)
 
@@ -347,17 +350,11 @@ class LiveCodeBenchBenchmark(BaseBenchmark):
         return final_metrics
 
     def load_questions(self) -> Dataset:
-        """Load LiveCodeBench questions from source."""
-        self.logger.info("Loading LiveCodeBench questions from source and converting to dataset...")
+        """Load LiveCodeBenchV5 questions from source."""
+        self.logger.info("Loading LiveCodeBenchV5 questions from source and converting to dataset...")
         cpu_count = os.cpu_count()
-        ds = load_dataset(
-            "livecodebench/code_generation_lite",
-            version_tag="release_v2",
-            split="test",
-            trust_remote_code=True,
-            cache_dir=HF_HUB_CACHE,
-        )
-        # Avoids "pyarrow.lib.ArrowInvalid: offset overflow while concatenating arrays" when mapping
+        lcb_codegen = load_dataset("livecodebench/code_generation_lite", version_tag="release_v5", cache_dir="./")['test']
+        ds = lcb_codegen.filter(filter_by_contest_date)
         processed_shards = []
         num_shards = 4
         for i in range(num_shards):

@@ -9,7 +9,7 @@ import logging
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import LM
 from multiple.evaluation import evaluate_functional_correctness
-from utils import extract_generation_code
+from .utils import extract_generation_code
 from eval.task import BaseBenchmark
 import traceback
 
@@ -115,7 +115,7 @@ class MultipleBenchmark(BaseBenchmark):
         super().__init__(logger)
         self.languages = languages
         self.data_dir = data_dir
-        self.max_tokens = max_tokens
+        self.max_tokens = max_tokens or 1024
         self.num_workers = num_workers
         self.timeout = timeout
         self.debug = debug

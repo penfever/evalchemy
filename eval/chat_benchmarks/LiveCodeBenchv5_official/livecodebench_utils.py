@@ -1,5 +1,5 @@
 """
-Code from LiveCodeBench utils
+Code from https://github.com/NovaSky-AI/SkyThought/blob/main/skythought/tools/util/livecodebench/testing_util.py
 """
 
 import ast
@@ -17,17 +17,6 @@ import zlib
 from typing import Callable, Dict, Optional
 
 import scipy.stats as stats
-
-
-def rating_to_difficulty(rating):
-    if rating < 1000:
-        return "Easy"
-    if rating < 1300:
-        return "Medium"
-    if rating <= 3500:
-        return "Hard"
-
-    return "Easy"
 
 
 def reliability_guard(maximum_memory_bytes: Optional[int] = None):
@@ -101,6 +90,36 @@ def reliability_guard(maximum_memory_bytes: Optional[int] = None):
     sys.modules["resource"] = None
     sys.modules["psutil"] = None
     sys.modules["tkinter"] = None
+
+
+def has_test_type(tests, type):  ## helper to select specific type of problems
+    """
+    Check if any test in the test list has 'testtype' set to 'type'.
+    """
+    test_list = json.loads(tests)
+    for test in test_list:
+        if test.get("testtype") == type:
+            return True
+    return False
+
+
+def translate_private_test_cases(encoded_data):
+    decoded_data = base64.b64decode(encoded_data)
+    decompressed_data = zlib.decompress(decoded_data)
+    original_data = pickle.loads(decompressed_data)
+    return json.loads(original_data)
+
+
+def map_to_example(row):
+    return {
+        "prompt": row["question_content"],
+        "test": row["private_test_cases"],
+        "entry_point": row["starter_code"],
+        "task_id": row["question_id"],
+        "is_stdin": has_test_type(row["public_test_cases"], "stdin"),
+        "public_test_cases": row["public_test_cases"],
+        "difficulty": row["difficulty"],
+    }
 
 
 def post_process_code(code):
@@ -244,22 +263,8 @@ def run_tests_for_one_example(test_cases, completion, result_list, is_extracted)
             return
 
 
-def codeelo_run(problem, completion, timeout, is_extracted):
-    tests = problem["examples"]
-    test_cases = []
-    for tc in tests:
-        ins = tc[0]
-        outs = tc[1]
-        testtype = "stdin"
-
-        test_cases.append(
-            {
-                "input": ins,
-                "output": outs,
-                "testtype": testtype,
-            }
-        )
-
+def lcb_run(problem, completion, timeout, is_extracted):
+    test_cases = problem["test"]
     manager = multiprocessing.Manager()
     result = manager.list()
     p = multiprocessing.Process(target=run_tests_for_one_example, args=(test_cases, completion, result, is_extracted))
