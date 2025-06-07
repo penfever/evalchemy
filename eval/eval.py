@@ -388,7 +388,7 @@ def cli_evaluate(args: Optional[argparse.Namespace] = None) -> None:
     # Check if any task is not in either task manager
     if any(task not in task_manager.tasks and task not in pretrain_task_manager.all_tasks for task in task_list):
         raise ValueError(
-            f"The following tasks could not be found: {[task for task in task_list if task not in task_manager.tasks and task not in pretrain_task_manager.all_tasks]}"
+            f"The following tasks could not be found: {[task for task in task_list if task not in task_manager.tasks and task not in pretrain_task_manager.all_tasks]}. \n Available instruct benchmarks:, {task_manager.available_tasks}"
         )
 
     # Initialize model

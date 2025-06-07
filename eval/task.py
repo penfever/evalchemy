@@ -251,6 +251,8 @@ class TaskManager:
             self.logger.debug(f"Successfully registered benchmark: {name}")
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.logger.error(f"Error registering benchmark {name}: {str(e)}")
 
     def get_list_generate_responses(self, task_list: List[str]) -> List[Callable]:
